@@ -1,0 +1,20 @@
+# CyberLens Skill Requirements
+# Install with: pip install -r requirements.txt
+
+# HTTP client for async requests
+httpx>=0.25.0
+
+# HTML parsing for content analysis
+beautifulsoup4>=4.12.0
+
+# Data validation and serialization
+pydantic>=2.0.0
+
+# Optional: faster HTML parsing
+lxml>=4.9.0
+
+# Development dependencies (install with: pip install -r requirements-dev.txt)
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# black>=23.0.0
+# mypy>=1.0.0

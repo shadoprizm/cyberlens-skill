@@ -1,0 +1,29 @@
+name: cyberlens
+display_name: "CyberLens Website Security Scanner"
+version: "0.1.0"
+description: "Scan websites for security vulnerabilities, get security scores, and understand findings in plain English."
+author: shadoprizm
+license: Apache-2.0
+tags: [security, scanning, web, vulnerability, https, headers]
+capabilities:
+  - web_scanning
+  - security_analysis
+tools:
+  - scan_website
+  - get_security_score
+  - explain_finding
+  - list_scan_rules
+
+config:
+  timeout_seconds:
+    type: integer
+    default: 30
+    description: "Request timeout for scan operations"
+  max_redirects:
+    type: integer
+    default: 5
+    description: "Maximum redirects to follow"
+  user_agent:
+    type: string
+    default: "CyberLens-Skill/0.1.0"
+    description: "User agent string for requests"
