@@ -9,12 +9,21 @@ capabilities:
   - web_scanning
   - security_analysis
 tools:
+  - connect_account
   - scan_website
   - get_security_score
   - explain_finding
   - list_scan_rules
 
 config:
+  api_key:
+    type: string
+    default: ""
+    description: "CyberLens API key for cloud scanning (auto-set by connect_account)"
+  api_base_url:
+    type: string
+    default: "https://phodfgfegbwkjhgsdyhc.supabase.co/functions/v1/public-api-scan"
+    description: "CyberLens API base URL"
   timeout_seconds:
     type: integer
     default: 30

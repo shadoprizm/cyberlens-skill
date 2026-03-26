@@ -2,6 +2,8 @@
 
 from typing import List, Dict, Any, Optional
 from .scanner import SecurityScanner
+from .api_client import CyberLensAPIClient
+from .auth import load_api_key, run_connect_flow
 from .models import (
     ScanResult,
     SecurityScore,
@@ -109,34 +111,99 @@ FINDING_EXPLANATIONS = {
 }
 
 
+async def connect_account() -> Dict[str, Any]:
+    """
+    Connect your CyberLens account for cloud-powered scanning.
+
+    Opens a browser window to sign in or create a CyberLens account.
+    Once authenticated, your API key is stored locally for future scans.
+
+    Returns:
+        Dictionary with connection status
+    """
+    try:
+        existing = load_api_key()
+        if existing:
+            return {
+                "success": True,
+                "message": "Already connected to CyberLens.",
+                "key_prefix": existing[:12] + "...",
+                "hint": "Run this again to reconnect with a new key.",
+            }
+
+        key = await run_connect_flow()
+        return {
+            "success": True,
+            "message": "Successfully connected to CyberLens!",
+            "key_prefix": key[:12] + "...",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 async def scan_website(
     url: str,
     scan_depth: str = "standard",
     timeout: float = 30.0,
+    use_cloud: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Perform a security scan on a website URL.
-    
+
+    Uses the CyberLens cloud API if connected (more thorough, 70+ checks).
+    Falls back to local scanning if not connected.
+
     Args:
         url: The website URL to scan (must include https:// or http://)
         scan_depth: How thorough the scan should be ("quick", "standard", "deep")
         timeout: Request timeout in seconds
-    
+        use_cloud: Force cloud (True) or local (False) scanning. None = auto-detect.
+
     Returns:
         Dictionary with scan results including score, grade, and findings
     """
+    api_key = load_api_key()
+    should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
+
+    if should_use_cloud and api_key:
+        try:
+            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+                result = await client.scan(url)
+                return {
+                    "success": True,
+                    "source": "cloud",
+                    "url": result.get("url", url),
+                    "score": result.get("scores", {}).get("overall", 0),
+                    "grade": _score_to_grade(result.get("scores", {}).get("overall", 0)),
+                    "findings_count": result.get("summary", {}).get("vulnerabilities_found", 0),
+                    "summary": result.get("summary", {}),
+                    "findings": [
+                        {
+                            "type": v.get("type", "unknown"),
+                            "severity": v.get("severity", "info"),
+                            "description": v.get("title", v.get("description", "")),
+                        }
+                        for v in (result.get("vulnerabilities", []) or [])[:10]
+                    ],
+                }
+        except Exception as e:
+            if use_cloud is True:
+                return {"success": False, "error": f"Cloud scan failed: {e}", "url": url}
+            # Fall through to local scan
+
+    # Local scanning fallback
     async with SecurityScanner(timeout=timeout) as scanner:
         result = await scanner.scan(url)
-        
+
         if result.error:
-            return {
-                "success": False,
-                "error": result.error,
-                "url": result.url,
-            }
-        
+            return {"success": False, "error": result.error, "url": result.url}
+
         return {
             "success": True,
+            "source": "local",
             "url": result.url,
             "score": result.score,
             "grade": result.grade,
@@ -161,25 +228,55 @@ async def get_security_score(
     timeout: float = 30.0,
 ) -> Dict[str, Any]:
     """
-    Quick security score check for a URL (faster than full scan).
-    
+    Quick security score check for a URL.
+
+    Uses the CyberLens cloud API if connected, otherwise local scanning.
+
     Args:
         url: The website URL to check
         timeout: Request timeout in seconds
-    
+
     Returns:
         Dictionary with score and grade
     """
+    api_key = load_api_key()
+
+    if api_key:
+        try:
+            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+                result = await client.scan(url)
+                score = result.get("scores", {}).get("overall", 0)
+                grade = _score_to_grade(score)
+                return {
+                    "success": True,
+                    "source": "cloud",
+                    "url": url,
+                    "score": score,
+                    "grade": grade,
+                    "assessment": _get_grade_assessment(grade),
+                }
+        except Exception:
+            pass  # Fall through to local
+
     async with SecurityScanner(timeout=timeout) as scanner:
         score, grade = await scanner.get_score(url)
-        
         return {
             "success": True,
+            "source": "local",
             "url": url,
             "score": score,
             "grade": grade,
             "assessment": _get_grade_assessment(grade),
         }
+
+
+def _score_to_grade(score: int) -> str:
+    """Convert a numeric score to a letter grade."""
+    if score >= 90: return "A"
+    if score >= 80: return "B"
+    if score >= 70: return "C"
+    if score >= 60: return "D"
+    return "F"
 
 
 def _get_grade_assessment(grade: str) -> str:
