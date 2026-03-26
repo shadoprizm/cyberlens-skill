@@ -8,6 +8,20 @@ from src.tools import (
 )
 
 
+class _FakeCloudClient:
+    def __init__(self, result):
+        self._result = result
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def scan(self, url):
+        return self._result
+
+
 class TestExplainFinding:
     """Tests for explain_finding tool."""
     
@@ -121,6 +135,72 @@ class TestGetGradeAssessment:
 class TestScanWebsite:
     """Tests for scan_website async tool."""
     
+    async def test_cloud_scan_surfaces_full_api_fields(self, monkeypatch):
+        """Test cloud scan output preserves the CyberLens API response shape."""
+        from src import tools
+
+        cloud_result = {
+            "url": "https://example.com",
+            "scores": {"overall": 82},
+            "summary": {"vulnerabilities_found": 2},
+            "scan_type": "premium",
+            "started_at": "2026-03-26T18:00:00Z",
+            "completed_at": "2026-03-26T18:00:12Z",
+            "ssl_info": {"isHTTPS": True},
+            "headers_analysis": {"csp": {"present": False}},
+            "database_passive_results": [{"testId": "db_git_folder_exposed", "severity": "high"}],
+            "ai_insights": {"summary": "Security posture needs work."},
+            "vulnerabilities": [
+                {
+                    "testId": "missing_csp",
+                    "message": "Missing Content Security Policy",
+                    "details": "The response does not include a CSP header.",
+                    "severity": "medium",
+                    "recommendation": "Add a Content-Security-Policy header.",
+                    "passed": False,
+                },
+                {
+                    "testId": "hsts_missing",
+                    "message": "HSTS header missing",
+                    "details": "Strict-Transport-Security is not set.",
+                    "severity": "medium",
+                    "recommendation": "Set HSTS with a long max-age.",
+                    "passed": False,
+                },
+            ],
+        }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0: _FakeCloudClient(cloud_result),
+        )
+
+        result = await tools.scan_website("https://example.com", use_cloud=True)
+
+        assert result["success"] is True
+        assert result["source"] == "cloud"
+        assert result["scan_type"] == "premium"
+        assert result["started_at"] == "2026-03-26T18:00:00Z"
+        assert result["completed_at"] == "2026-03-26T18:00:12Z"
+        assert result["findings_count"] == 2
+        assert len(result["findings"]) == 2
+        assert result["ssl_info"] == {"isHTTPS": True}
+        assert result["headers_analysis"] == {"csp": {"present": False}}
+        assert result["database_passive_results"] == [{"testId": "db_git_folder_exposed", "severity": "high"}]
+        assert result["ai_insights"] == {"summary": "Security posture needs work."}
+        assert result["findings"][0] == {
+            "test_id": "missing_csp",
+            "type": "missing_csp",
+            "severity": "medium",
+            "message": "Missing Content Security Policy",
+            "description": "Missing Content Security Policy",
+            "details": "The response does not include a CSP header.",
+            "recommendation": "Add a Content-Security-Policy header.",
+            "passed": False,
+        }
+
     async def test_scan_valid_https_site(self):
         """Test scanning a valid HTTPS site."""
         from src.tools import scan_website

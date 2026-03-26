@@ -172,21 +172,38 @@ async def scan_website(
         try:
             async with CyberLensAPIClient(api_key, timeout=timeout) as client:
                 result = await client.scan(url)
+                vulnerabilities = result.get("vulnerabilities", []) or []
+                findings_count = result.get("summary", {}).get("vulnerabilities_found")
+                if not isinstance(findings_count, int):
+                    findings_count = len(vulnerabilities)
+
                 return {
                     "success": True,
                     "source": "cloud",
                     "url": result.get("url", url),
                     "score": result.get("scores", {}).get("overall", 0),
                     "grade": _score_to_grade(result.get("scores", {}).get("overall", 0)),
-                    "findings_count": result.get("summary", {}).get("vulnerabilities_found", 0),
+                    "scan_type": result.get("scan_type"),
+                    "started_at": result.get("started_at"),
+                    "completed_at": result.get("completed_at"),
+                    "findings_count": findings_count,
                     "summary": result.get("summary", {}),
+                    "ssl_info": result.get("ssl_info", {}),
+                    "headers_analysis": result.get("headers_analysis", {}),
+                    "database_passive_results": result.get("database_passive_results", []),
+                    "ai_insights": result.get("ai_insights"),
                     "findings": [
                         {
-                            "type": v.get("type", "unknown"),
+                            "test_id": v.get("testId") or v.get("type", "unknown"),
+                            "type": v.get("testId") or v.get("type", "unknown"),
                             "severity": v.get("severity", "info"),
-                            "description": v.get("title", v.get("description", "")),
+                            "message": v.get("message") or v.get("title") or v.get("description", ""),
+                            "description": v.get("message") or v.get("title") or v.get("description", ""),
+                            "details": v.get("details") or v.get("description", ""),
+                            "recommendation": v.get("recommendation", ""),
+                            "passed": bool(v.get("passed", False)),
                         }
-                        for v in (result.get("vulnerabilities", []) or [])[:10]
+                        for v in vulnerabilities
                     ],
                 }
         except Exception as e:
