@@ -4,11 +4,12 @@ import os
 import secrets
 import threading
 import webbrowser
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlencode, urlparse
 
+import httpx
 import yaml
 
 
@@ -18,22 +19,39 @@ CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    """Handles the localhost callback from cyberlensai.com/connect."""
+    """Handles the connect callback from cyberlensai.com/connect."""
 
-    api_key: Optional[str] = None
-    state: Optional[str] = None
     expected_state: Optional[str] = None
+    connect_code: Optional[str] = None
+    exchange_url: Optional[str] = None
+    callback_error: Optional[str] = None
     received = threading.Event()
 
     def do_GET(self, *args, **kwargs):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
 
-        key = params.get("key", [None])[0]
         state = params.get("state", [None])[0]
+        code = params.get("code", [None])[0]
+        exchange_url = params.get("exchange", [None])[0]
+        error = params.get("error", [None])[0]
 
-        if key and state == self.expected_state:
-            _CallbackHandler.api_key = key
+        if state != self.expected_state:
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Invalid callback. State mismatch.")
+        elif error:
+            _CallbackHandler.callback_error = error
+            _CallbackHandler.received.set()
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(f"Connection failed: {error}".encode("utf-8"))
+        elif code and exchange_url:
+            _CallbackHandler.connect_code = code
+            _CallbackHandler.exchange_url = exchange_url
+            _CallbackHandler.received.set()
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -41,17 +59,17 @@ class _CallbackHandler(BaseHTTPRequestHandler):
                 b"<html><body style='font-family:system-ui;background:#1a1a2e;color:white;"
                 b"display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
                 b"<div style='text-align:center'>"
-                b"<h1>&#x2705; Connected!</h1>"
-                b"<p>You can close this tab and return to your terminal.</p>"
+                b"<h1>&#x2705; Authorization Received</h1>"
+                b"<p>You can close this tab while OpenClaw finishes the secure exchange.</p>"
                 b"</div></body></html>"
             )
         else:
+            _CallbackHandler.callback_error = "Missing exchange code."
+            _CallbackHandler.received.set()
             self.send_response(400)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Invalid callback. State mismatch or missing key.")
-
-        _CallbackHandler.received.set()
+            self.wfile.write(b"Invalid callback. Missing exchange code.")
 
     def log_message(self, format, *args):
         pass  # Suppress HTTP server logs
@@ -60,6 +78,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 def _find_open_port() -> int:
     """Find an available port in the 54321-54399 range."""
     import socket
+
     for port in range(54321, 54400):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -68,6 +87,80 @@ def _find_open_port() -> int:
         except OSError:
             continue
     raise RuntimeError("No available ports in range 54321-54399")
+
+
+def _is_loopback_host(hostname: Optional[str]) -> bool:
+    """Return True when the callback host resolves to the local machine."""
+    return hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _resolve_callback_config() -> tuple[str, int, str]:
+    """Resolve the bind address and callback URL for the connect flow."""
+    configured_callback = os.environ.get("CYBERLENS_CONNECT_CALLBACK_URL", "").strip()
+
+    if not configured_callback:
+        port = _find_open_port()
+        return "127.0.0.1", port, f"http://localhost:{port}/callback"
+
+    parsed = urlparse(configured_callback)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(
+            "CYBERLENS_CONNECT_CALLBACK_URL must be a valid http:// or https:// URL."
+        )
+
+    callback_path = parsed.path or "/callback"
+    callback_url = parsed._replace(path=callback_path).geturl()
+
+    bind_port_value = os.environ.get("CYBERLENS_CONNECT_BIND_PORT", "").strip()
+    if bind_port_value:
+        bind_port = int(bind_port_value)
+    elif parsed.port is not None:
+        bind_port = parsed.port
+    else:
+        raise ValueError(
+            "Configured callback URLs must include a port or set "
+            "CYBERLENS_CONNECT_BIND_PORT explicitly."
+        )
+
+    bind_host = os.environ.get("CYBERLENS_CONNECT_BIND_HOST", "").strip()
+    if not bind_host:
+        bind_host = "127.0.0.1" if _is_loopback_host(parsed.hostname) else "0.0.0.0"
+
+    return bind_host, bind_port, callback_url
+
+
+async def _exchange_connect_code(code: str, exchange_url: str) -> str:
+    """Redeem a one-time connect code for the real CyberLens account key."""
+    parsed = urlparse(exchange_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Invalid exchange URL returned by CyberLens.")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(exchange_url, json={"code": code})
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Failed to exchange connect code: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+
+    if response.status_code == 404:
+        raise RuntimeError("CyberLens connect code was not found. Please try again.")
+    if response.status_code == 409:
+        raise RuntimeError("CyberLens connect code was already used. Please reconnect.")
+    if response.status_code == 410:
+        raise RuntimeError("CyberLens connect code expired. Please reconnect.")
+    if response.status_code >= 400:
+        message = payload.get("error") or f"Exchange failed with status {response.status_code}."
+        raise RuntimeError(message)
+
+    full_key = payload.get("fullKey")
+    if not full_key:
+        raise RuntimeError("CyberLens exchange response did not include an API key.")
+
+    return full_key
 
 
 def save_api_key(key: str) -> Path:
@@ -106,46 +199,54 @@ async def run_connect_flow() -> str:
     """
     Run the browser-based connect flow.
 
-    Opens cyberlensai.com/connect in the user's browser, starts a localhost
-    callback server, and waits for the API key to be delivered.
+    Opens cyberlensai.com/connect in the user's browser, starts a callback
+    server, and waits for a one-time connect code to be delivered.
 
     Returns the API key string.
     """
     state = secrets.token_urlsafe(32)
-    port = _find_open_port()
+    bind_host, bind_port, callback_url = _resolve_callback_config()
 
     # Reset handler state
-    _CallbackHandler.api_key = None
     _CallbackHandler.expected_state = state
+    _CallbackHandler.connect_code = None
+    _CallbackHandler.exchange_url = None
+    _CallbackHandler.callback_error = None
     _CallbackHandler.received = threading.Event()
 
     # Start callback server in a thread
-    server = HTTPServer(("127.0.0.1", port), _CallbackHandler)
+    server = HTTPServer((bind_host, bind_port), _CallbackHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
-    # Open browser
-    callback_url = f"http://localhost:{port}/callback"
-    connect_url = (
-        f"{CONNECT_BASE_URL}?client=openclaw_skill"
-        f"&callback={callback_url}"
-        f"&state={state}"
-    )
+    query = urlencode({
+        "client": "openclaw_skill",
+        "callback": callback_url,
+        "state": state,
+    })
+    connect_url = f"{CONNECT_BASE_URL}?{query}"
+    print(f"Complete CyberLens connection in your browser: {connect_url}")
     webbrowser.open(connect_url)
 
-    # Wait for callback (timeout 120 seconds)
-    received = _CallbackHandler.received.wait(timeout=120)
+    # Wait for callback (timeout 5 minutes)
+    received = _CallbackHandler.received.wait(timeout=300)
     server.shutdown()
+    server.server_close()
 
-    if not received or not _CallbackHandler.api_key:
+    if _CallbackHandler.callback_error:
+        raise RuntimeError(f"CyberLens connection failed: {_CallbackHandler.callback_error}")
+
+    if not received or not _CallbackHandler.connect_code or not _CallbackHandler.exchange_url:
         raise TimeoutError(
-            "Did not receive API key within 120 seconds. "
-            "Please try again or manually copy your key from cyberlensai.com/profile."
+            "Did not receive a CyberLens connect code within 5 minutes. "
+            "Please try again or set CYBERLENS_API_KEY manually."
         )
 
-    key = _CallbackHandler.api_key
+    key = await _exchange_connect_code(
+        _CallbackHandler.connect_code,
+        _CallbackHandler.exchange_url,
+    )
 
     # Save to config
-    config_path = save_api_key(key)
-
+    save_api_key(key)
     return key

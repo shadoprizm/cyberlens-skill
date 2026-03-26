@@ -18,7 +18,7 @@ Scan websites for security vulnerabilities using the CyberLens cloud API at cybe
 
 ## First-Time Setup
 
-Before scanning, the user must connect their CyberLens account. Run the `connect_account` tool. This opens a browser to cyberlensai.com where they sign in or create an account. The API key is delivered automatically via localhost callback and stored at `~/.openclaw/skills/cyberlens/config.yaml`.
+Before scanning, the user must connect their CyberLens account. Run the `connect_account` tool. This opens a browser to cyberlensai.com where they sign in or create an account. A short-lived connect code is delivered through the callback, the skill exchanges that code for the real account key over HTTPS, and the key is stored at `~/.openclaw/skills/cyberlens/config.yaml`.
 
 If the user doesn't have a CyberLens account, direct them to https://cyberlensai.com to sign up. Free tier includes 5 scans/month (2 website + 3 repository).
 
@@ -41,6 +41,8 @@ Use this when:
 - The user wants to connect their CyberLens account
 - The user gets an authentication error during scanning
 - The user wants to switch to a different account
+
+If OpenClaw is running on another machine, set `CYBERLENS_CONNECT_CALLBACK_URL` to a browser-reachable callback URL before running `connect_account`. Use `CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` when a reverse proxy or different local bind address is involved. If no callback path is available, the user can still set `CYBERLENS_API_KEY` manually.
 
 ### scan_website
 

@@ -49,12 +49,33 @@ The first time you use the skill, tell your agent to "connect my CyberLens accou
 
 1. Opens your browser to [cyberlensai.com/connect](https://cyberlensai.com/connect)
 2. You sign in or create a free account
-3. A localhost callback server captures the API key automatically
-4. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
+3. A callback server receives a short-lived connect code
+4. The skill exchanges that code for your account key over HTTPS
+5. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
 
-No copy-pasting required. The skill detects the key on subsequent scans and routes through the cloud API automatically.
+No copy-pasting required. The raw account key no longer appears in the browser callback URL. The skill detects the key on subsequent scans and routes through the cloud API automatically.
 
 You can also set the key via environment variable: `CYBERLENS_API_KEY`.
+
+### Remote or Server Installs
+
+If OpenClaw is running on a different machine than the browser you use to sign in, set a browser-reachable callback URL before running `connect_account`.
+
+Examples:
+
+```bash
+# Direct LAN or VPN callback
+export CYBERLENS_CONNECT_CALLBACK_URL="http://10.0.0.5:54321/callback"
+
+# Hosted HTTPS callback behind a reverse proxy
+export CYBERLENS_CONNECT_CALLBACK_URL="https://openclaw.example.com/cyberlens/callback"
+export CYBERLENS_CONNECT_BIND_HOST="127.0.0.1"
+export CYBERLENS_CONNECT_BIND_PORT="54321"
+```
+
+`CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` are optional. Use them when the skill should listen on a different local interface or port than the public callback endpoint. For hosted HTTPS callbacks, your proxy must forward requests to the bind host and port where the skill is listening.
+
+If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually instead.
 
 ## Tools
 
@@ -141,7 +162,7 @@ cyberlens-skill/
     tools.py            # Tool implementations (connect, scan, score, explain, rules)
     scanner.py          # Local SecurityScanner (async, httpx + BeautifulSoup)
     api_client.py       # CyberLens cloud API client (async, exponential backoff)
-    auth.py             # Browser-based connect flow with localhost callback
+    auth.py             # Browser-based connect flow with secure code exchange
     models.py           # Pydantic data models
   examples/
     basic_scan.py
