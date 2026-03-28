@@ -1,10 +1,10 @@
 name: cyberlens
 display_name: "CyberLens Website Security Scanner"
-version: "0.1.0"
-description: "Scan websites for security vulnerabilities, get security scores, and understand findings in plain English."
+version: "1.0.0"
+description: "Scan live websites for security headers, HTTPS issues, exposed technologies, insecure forms, and other web security risks with cloud or local analysis."
 author: shadoprizm
 license: Apache-2.0
-tags: [security, scanning, web, vulnerability, https, headers]
+tags: [security, scanner, website-security, appsec, https, headers]
 capabilities:
   - web_scanning
   - security_analysis
@@ -34,5 +34,5 @@ config:
     description: "Maximum redirects to follow"
   user_agent:
     type: string
-    default: "CyberLens-Skill/0.1.0"
+    default: "CyberLens-Skill/1.0.0"
     description: "User agent string for requests"

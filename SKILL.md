@@ -1,12 +1,12 @@
 ---
 name: cyberlens
-description: Scan websites for security vulnerabilities using the CyberLens cloud API. Connect your CyberLens account, scan URLs, get security scores, and explain findings in plain English.
+description: Audit live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other web security issues using CyberLens cloud or local scanning.
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "primaryEnv": "CYBERLENS_API_KEY", "emoji": "\ud83d\udd12", "homepage": "https://cyberlensai.com"}}
 ---
 
 # CyberLens Security Scanner
 
-Scan websites for security vulnerabilities using the CyberLens cloud API at cyberlensai.com. Results include a 0-100 security score, letter grade (A-F), and detailed findings with severity levels and remediation advice.
+Scan live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other common web security issues. Results include a 0-100 security score, letter grade (A-F), and plain-English remediation advice. When connected to cyberlensai.com, the skill runs a deeper 70+ check cloud scan and falls back to local analysis when needed.
 
 ## Prerequisites
 

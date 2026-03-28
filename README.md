@@ -5,7 +5,14 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-An [OpenClaw](https://openclaw.com) skill that gives AI agents the ability to scan websites for security vulnerabilities. When connected to a [CyberLens](https://cyberlensai.com) account, scans run through the cloud API with 70+ checks and results match the web dashboard. Falls back to local scanning (~15 checks) without an account.
+An [OpenClaw](https://openclaw.com) skill that lets AI agents audit live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other common web security issues. When connected to a [CyberLens](https://cyberlensai.com) account, scans run through the cloud API with 70+ checks and results match the web dashboard. Falls back to local scanning (~15 checks) without an account.
+
+## Why Install CyberLens
+
+- Scan any live website and get a fast security score with a clear letter grade.
+- Catch missing headers, HTTPS problems, insecure form actions, and information disclosure issues.
+- Use deeper cloud scans when connected, with a local fallback when you are not.
+- Get plain-English explanations and remediation advice that agents can act on immediately.
 
 ## Installation
 
