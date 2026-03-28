@@ -27,6 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CLAWHUB_SKILL_SLUG: cyberlens
+      CLAWHUB_SKILL_NAME: CyberLens Security Scanner
 
     steps:
       - name: Check out repository
@@ -47,5 +50,16 @@ jobs:
           test -n "$CLAWHUB_TOKEN"
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
 
+      - name: Read skill version
+        run: |
+          version=$(sed -n 's/^version: "\(.*\)"/\1/p' skill.yaml)
+          test -n "$version"
+          echo "CLAWHUB_SKILL_VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Publish updated skill
-        run: clawhub sync --all --bump patch --changelog "Automated publish from GitHub Actions"
+        run: >
+          clawhub publish .
+          --slug "$CLAWHUB_SKILL_SLUG"
+          --name "$CLAWHUB_SKILL_NAME"
+          --version "$CLAWHUB_SKILL_VERSION"
+          --changelog "Automated publish from GitHub Actions"
