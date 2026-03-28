@@ -8,13 +8,11 @@ httpx>=0.25.0
 beautifulsoup4>=4.12.0
 
 # Data validation and serialization
-pydantic>=2.0.0
+# CVE-2024-3772 is fixed in Pydantic 2.4.0+ for the 2.x line.
+pydantic>=2.4.0
 
 # Config file parsing
 pyyaml>=6.0
-
-# Optional: faster HTML parsing
-lxml>=4.9.0
 
 # Development dependencies (install with: pip install -r requirements-dev.txt)
 # pytest>=7.0.0

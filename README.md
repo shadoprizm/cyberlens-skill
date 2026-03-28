@@ -27,6 +27,12 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
+For a reproducible install of the skill's pinned direct dependencies, use:
+
+```bash
+pip install -r requirements.lock
+```
+
 OpenClaw auto-discovers the skill from the `SKILL.md` file on the next session (or ask your agent to "refresh skills").
 
 ### Configuration in openclaw.json (Optional)
@@ -157,6 +163,11 @@ cyberlens-skill/
   SKILL.md              # OpenClaw skill manifest (YAML frontmatter + instructions)
   skill.yaml            # Skill metadata and config schema
   requirements.txt      # Python dependencies
+  requirements.lock     # Pinned direct dependencies for reproducible installs
+  SECURITY.md           # Vulnerability reporting policy
+  CONTRIBUTING.md       # Contribution workflow and expectations
+  LICENSE               # Apache 2.0 license
+  .github/workflows/ci.yml  # Automated test workflow
   src/
     __init__.py         # Package exports
     tools.py            # Tool implementations (connect, scan, score, explain, rules)
@@ -174,9 +185,15 @@ cyberlens-skill/
 ## Dependencies
 
 - `httpx` -- Async HTTP client
-- `beautifulsoup4` + `lxml` -- HTML parsing (for local scanning)
+- `beautifulsoup4` -- HTML parsing (for local scanning)
 - `pydantic` -- Data validation
 - `pyyaml` -- Config file handling
+
+The local scanner uses Python's built-in `html.parser` via BeautifulSoup, so `lxml` is not required for the default install.
+
+## Security
+
+Please review [SECURITY.md](SECURITY.md) before reporting vulnerabilities. Sensitive reports should not be filed as public issues.
 
 ## Related Repositories
 

@@ -13,7 +13,7 @@ Scan websites for security vulnerabilities using the CyberLens cloud API at cybe
 - **Python 3.9+**: Required for script execution
 - **Python Packages**:
   ```bash
-  pip install httpx beautifulsoup4 pydantic pyyaml lxml
+  pip install -r requirements.txt
   ```
 
 ## First-Time Setup
