@@ -1,5 +1,8 @@
 """Tool function implementations for OpenClaw integration."""
 
+import json
+import os
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 from .scanner import SecurityScanner
@@ -12,6 +15,16 @@ from .models import (
     FindingExplanation,
     ScanRule,
 )
+
+
+CLAWHUB_HOSTS = {
+    "clawhub.ai",
+    "www.clawhub.ai",
+    "claw-hub.net",
+    "www.claw-hub.net",
+    "openclaw-hub.org",
+    "www.openclaw-hub.org",
+}
 
 
 GITHUB_RESERVED_PATHS = {
@@ -158,7 +171,7 @@ def _validate_target_url(target: str) -> Optional[str]:
 
 
 def _classify_target(target: str) -> str:
-    """Classify a scan target as a website or GitHub repository URL."""
+    """Classify a scan target as a website, GitHub repository, or Claw Hub skill."""
     validation_error = _validate_target_url(target)
     if validation_error:
         return "invalid"
@@ -166,6 +179,10 @@ def _classify_target(target: str) -> str:
     parsed = urlparse(target)
     host = parsed.netloc.lower()
     path_parts = [part for part in parsed.path.split("/") if part]
+
+    # Claw Hub skill pages: clawhub.ai/author/skill-name
+    if host in CLAWHUB_HOSTS and len(path_parts) >= 1:
+        return "skill"
 
     if host in {"github.com", "www.github.com"} and len(path_parts) >= 2:
         owner = path_parts[0].lower()
@@ -411,14 +428,15 @@ async def scan_target(
     api_base_url = load_api_base_url()
     should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
 
-    if target_type == "repository":
+    if target_type in ("repository", "skill"):
         if not (should_use_cloud and api_key):
+            label = "Skill" if target_type == "skill" else "Repository"
             return {
                 "success": False,
-                "target_type": "repository",
+                "target_type": target_type,
                 "url": target,
                 "error": (
-                    "Repository scanning requires a connected CyberLens account. "
+                    f"{label} scanning requires a connected CyberLens account. "
                     "Run connect_account or set CYBERLENS_API_KEY."
                 ),
             }
@@ -426,13 +444,16 @@ async def scan_target(
         try:
             async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(target)
-                return _format_cloud_scan_result(result, target)
+                formatted = _format_cloud_scan_result(result, target)
+                if target_type == "skill":
+                    formatted["target_type"] = "skill"
+                return formatted
         except Exception as e:
             return {
                 "success": False,
-                "target_type": "repository",
+                "target_type": target_type,
                 "url": target,
-                "error": f"Cloud repository scan failed: {e}",
+                "error": f"Cloud {target_type} scan failed: {e}",
             }
 
     if should_use_cloud and api_key:
@@ -529,12 +550,12 @@ async def scan_repository(
     Returns:
         Dictionary with repository security findings, scores, and summary
     """
-    if _classify_target(repository_url) != "repository":
+    if _classify_target(repository_url) not in ("repository", "skill"):
         return {
             "success": False,
             "error": (
-                "Repository URL must be a GitHub repository URL like "
-                "https://github.com/owner/repo"
+                "Expected a GitHub repository URL (e.g. https://github.com/owner/repo) "
+                "or a Claw Hub skill URL (e.g. https://clawhub.ai/author/skill-name)."
             ),
             "url": repository_url,
         }
@@ -570,14 +591,15 @@ async def get_security_score(
     api_key = load_api_key()
     api_base_url = load_api_base_url()
 
-    if target_type == "repository":
+    if target_type in ("repository", "skill"):
+        label = "Skill" if target_type == "skill" else "Repository"
         if not api_key:
             return {
                 "success": False,
-                "target_type": "repository",
+                "target_type": target_type,
                 "url": url,
                 "error": (
-                    "Repository scoring requires a connected CyberLens account. "
+                    f"{label} scoring requires a connected CyberLens account. "
                     "Run connect_account or set CYBERLENS_API_KEY."
                 ),
             }
@@ -590,7 +612,7 @@ async def get_security_score(
                 return {
                     "success": True,
                     "source": "cloud",
-                    "target_type": "repository",
+                    "target_type": target_type,
                     "url": result.get("target", url),
                     "score": score,
                     "security_score": score,
@@ -601,9 +623,9 @@ async def get_security_score(
         except Exception as e:
             return {
                 "success": False,
-                "target_type": "repository",
+                "target_type": target_type,
                 "url": url,
-                "error": f"Cloud repository scoring failed: {e}",
+                "error": f"Cloud {target_type} scoring failed: {e}",
             }
 
     if api_key:
@@ -757,9 +779,437 @@ def list_scan_rules() -> Dict[str, Any]:
     }
     
     total_rules = sum(len(cat["rules"]) for cat in categories.values())
-    
+
     return {
         "success": True,
         "total_rules": total_rules,
         "categories": categories,
+    }
+
+
+async def scan_skill(
+    skill_url: str,
+    timeout: float = 60.0,
+) -> Dict[str, Any]:
+    """
+    Scan a Claw Hub skill before installing it.
+
+    Accepts a Claw Hub URL (e.g. https://clawhub.ai/author/skill-name) or a
+    GitHub repository URL for an OpenClaw skill. The scan is performed by the
+    CyberLens cloud API, which analyses the skill package for security
+    vulnerabilities, malicious code, dependency issues, secret leaks, and
+    trust posture problems. A connected CyberLens account is required.
+
+    Args:
+        skill_url: Claw Hub skill URL or GitHub repository URL for an OpenClaw skill
+        timeout: Request timeout in seconds (default: 60)
+
+    Returns:
+        Dictionary with security score, trust score, grade, AI analysis,
+        and detailed findings organised by category
+    """
+    validation_error = _validate_target_url(skill_url)
+    if validation_error:
+        return {"success": False, "error": validation_error, "url": skill_url}
+
+    target_type = _classify_target(skill_url)
+    if target_type not in ("skill", "repository"):
+        return {
+            "success": False,
+            "error": (
+                "Expected a Claw Hub skill URL (e.g. https://clawhub.ai/author/skill-name) "
+                "or a GitHub repository URL (e.g. https://github.com/owner/repo)."
+            ),
+            "url": skill_url,
+        }
+
+    api_key = load_api_key()
+    if not api_key:
+        return {
+            "success": False,
+            "target_type": "skill",
+            "url": skill_url,
+            "error": (
+                "Skill scanning requires a connected CyberLens account. "
+                "Run connect_account or set CYBERLENS_API_KEY."
+            ),
+        }
+
+    api_base_url = load_api_base_url()
+    try:
+        async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
+            result = await client.scan(skill_url)
+            formatted = _format_cloud_scan_result(result, skill_url)
+            formatted["target_type"] = "skill"
+            return formatted
+    except Exception as e:
+        return {
+            "success": False,
+            "target_type": "skill",
+            "url": skill_url,
+            "error": f"Skill scan failed: {e}",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Report generation helpers
+# ---------------------------------------------------------------------------
+
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def _severity_sort_key(finding: Dict[str, Any]) -> int:
+    return _SEVERITY_ORDER.get(finding.get("severity", "info"), 5)
+
+
+def _severity_emoji(severity: str) -> str:
+    return {
+        "critical": "[!]",
+        "high": "[H]",
+        "medium": "[M]",
+        "low": "[L]",
+        "info": "[i]",
+    }.get(severity, "[-]")
+
+
+def generate_report(scan_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate a formatted markdown report from scan results.
+
+    Takes the output of scan_target, scan_skill, scan_website, or
+    scan_repository and produces a clean markdown report suitable for
+    sharing via messaging (Telegram, Discord, Signal), the web UI, or
+    any channel that renders markdown.
+
+    Args:
+        scan_result: The dictionary returned by any CyberLens scan tool
+
+    Returns:
+        Dictionary with 'success', 'format' ("markdown"), and 'report' (the
+        markdown string)
+    """
+    if not scan_result.get("success"):
+        return {
+            "success": False,
+            "error": scan_result.get("error", "Cannot generate report from a failed scan."),
+        }
+
+    target_type = scan_result.get("target_type", "website")
+    url = scan_result.get("url", "Unknown")
+    score = scan_result.get("score") or scan_result.get("security_score", "N/A")
+    grade = scan_result.get("grade", "N/A")
+    trust_score = scan_result.get("trust_score")
+    assessment = scan_result.get("assessment", "")
+    source = scan_result.get("source", "cloud")
+    generated_at = scan_result.get("generated_at") or scan_result.get("scan_date") or datetime.now(timezone.utc).isoformat()
+    findings = scan_result.get("findings", [])
+    ai_analysis = scan_result.get("ai_analysis") or scan_result.get("ai_insights")
+
+    # Header
+    type_label = {"skill": "Claw Hub Skill", "repository": "Repository", "website": "Website"}.get(target_type, target_type.title())
+    lines: List[str] = []
+    lines.append(f"# CyberLens Security Report")
+    lines.append("")
+    lines.append(f"**Target:** {url}")
+    lines.append(f"**Type:** {type_label}")
+    lines.append(f"**Scan Source:** {source}")
+    lines.append(f"**Date:** {generated_at}")
+    lines.append("")
+
+    # Score card
+    lines.append("## Score")
+    lines.append("")
+    lines.append(f"| Metric | Value |")
+    lines.append(f"|--------|-------|")
+    lines.append(f"| Security Score | {score} / 100 |")
+    lines.append(f"| Grade | {grade} |")
+    if trust_score is not None:
+        lines.append(f"| Trust Score | {trust_score} / 100 |")
+    if assessment:
+        lines.append(f"| Assessment | {assessment} |")
+    lines.append("")
+
+    # AI analysis
+    if ai_analysis:
+        lines.append("## AI Analysis")
+        lines.append("")
+        if isinstance(ai_analysis, dict):
+            for key, value in ai_analysis.items():
+                lines.append(f"**{key.replace('_', ' ').title()}:** {value}")
+                lines.append("")
+        else:
+            lines.append(str(ai_analysis))
+            lines.append("")
+
+    # Summary
+    summary = scan_result.get("summary")
+    if summary and isinstance(summary, dict):
+        lines.append("## Summary")
+        lines.append("")
+        for key, value in summary.items():
+            lines.append(f"- **{key.replace('_', ' ').title()}:** {value}")
+        lines.append("")
+
+    # Findings
+    if findings:
+        sorted_findings = sorted(findings, key=_severity_sort_key)
+        lines.append(f"## Findings ({len(findings)} total)")
+        lines.append("")
+        for i, f in enumerate(sorted_findings, 1):
+            sev = f.get("severity", "info")
+            marker = _severity_emoji(sev)
+            msg = f.get("message") or f.get("description", "No description")
+            lines.append(f"### {i}. {marker} {msg}")
+            lines.append("")
+            lines.append(f"- **Severity:** {sev}")
+            if f.get("type"):
+                lines.append(f"- **Type:** {f['type']}")
+            if f.get("category"):
+                lines.append(f"- **Category:** {f['category']}")
+            if f.get("description") and f.get("description") != msg:
+                lines.append(f"- **Details:** {f['description']}")
+            if f.get("details") and f.get("details") != f.get("description"):
+                lines.append(f"- **Details:** {f['details']}")
+            if f.get("recommendation") or f.get("remediation"):
+                lines.append(f"- **Recommendation:** {f.get('recommendation') or f.get('remediation')}")
+            if f.get("cve"):
+                lines.append(f"- **CVE:** {f['cve']}")
+            if f.get("cve_ids"):
+                lines.append(f"- **CVE IDs:** {', '.join(f['cve_ids'])}")
+            lines.append("")
+    else:
+        lines.append("## Findings")
+        lines.append("")
+        lines.append("No findings detected.")
+        lines.append("")
+
+    # Footer
+    lines.append("---")
+    lines.append("*Generated by CyberLens Security Scanner — https://cyberlensai.com*")
+
+    report_text = "\n".join(lines)
+
+    return {
+        "success": True,
+        "format": "markdown",
+        "report": report_text,
+        "url": url,
+        "target_type": target_type,
+        "score": score,
+        "grade": grade,
+    }
+
+
+def export_report_pdf(
+    scan_result: Dict[str, Any],
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Export scan results as a PDF file.
+
+    Takes the output of scan_target, scan_skill, scan_website, or
+    scan_repository and writes a professionally formatted PDF report.
+    Requires the reportlab package (pip install reportlab).
+
+    Args:
+        scan_result: The dictionary returned by any CyberLens scan tool
+        output_path: Where to save the PDF. Defaults to
+                     ~/cyberlens-report-<timestamp>.pdf
+
+    Returns:
+        Dictionary with 'success' and 'path' (absolute path to the PDF)
+    """
+    if not scan_result.get("success"):
+        return {
+            "success": False,
+            "error": scan_result.get("error", "Cannot generate PDF from a failed scan."),
+        }
+
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+    except ImportError:
+        return {
+            "success": False,
+            "error": (
+                "PDF export requires the reportlab package. "
+                "Install it with: pip install reportlab"
+            ),
+        }
+
+    # Resolve output path
+    if not output_path:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        output_path = os.path.expanduser(f"~/cyberlens-report-{ts}.pdf")
+    output_path = os.path.abspath(os.path.expanduser(output_path))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Extract data
+    target_type = scan_result.get("target_type", "website")
+    url = scan_result.get("url", "Unknown")
+    score = scan_result.get("score") or scan_result.get("security_score", "N/A")
+    grade = scan_result.get("grade", "N/A")
+    trust_score = scan_result.get("trust_score")
+    assessment = scan_result.get("assessment", "")
+    source = scan_result.get("source", "cloud")
+    generated_at = scan_result.get("generated_at") or scan_result.get("scan_date") or datetime.now(timezone.utc).isoformat()
+    findings = scan_result.get("findings", [])
+    ai_analysis = scan_result.get("ai_analysis") or scan_result.get("ai_insights")
+    summary = scan_result.get("summary")
+    type_label = {"skill": "Claw Hub Skill", "repository": "Repository", "website": "Website"}.get(target_type, target_type.title())
+
+    # Grade colour
+    grade_colour = {
+        "A": colors.HexColor("#22c55e"),
+        "B": colors.HexColor("#84cc16"),
+        "C": colors.HexColor("#eab308"),
+        "D": colors.HexColor("#f97316"),
+        "F": colors.HexColor("#ef4444"),
+    }.get(grade, colors.grey)
+
+    severity_colour = {
+        "critical": colors.HexColor("#ef4444"),
+        "high": colors.HexColor("#f97316"),
+        "medium": colors.HexColor("#eab308"),
+        "low": colors.HexColor("#3b82f6"),
+        "info": colors.HexColor("#6b7280"),
+    }
+
+    # Build PDF
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("CL_Title", parent=styles["Title"], fontSize=22, spaceAfter=6)
+    heading_style = ParagraphStyle("CL_Heading", parent=styles["Heading2"], fontSize=14, spaceBefore=16, spaceAfter=6)
+    body_style = ParagraphStyle("CL_Body", parent=styles["Normal"], fontSize=10, spaceAfter=4)
+    small_style = ParagraphStyle("CL_Small", parent=styles["Normal"], fontSize=8, textColor=colors.grey)
+
+    story: list = []
+
+    # Title
+    story.append(Paragraph("CyberLens Security Report", title_style))
+    story.append(Spacer(1, 8))
+
+    # Meta table
+    meta_data = [
+        ["Target", url],
+        ["Type", type_label],
+        ["Scan Source", source],
+        ["Date", str(generated_at)],
+    ]
+    meta_table = Table(meta_data, colWidths=[1.4 * inch, 5.0 * inch])
+    meta_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(meta_table)
+    story.append(Spacer(1, 12))
+
+    # Score card
+    story.append(Paragraph("Score", heading_style))
+    score_data = [["Security Score", f"{score} / 100"], ["Grade", str(grade)]]
+    if trust_score is not None:
+        score_data.append(["Trust Score", f"{trust_score} / 100"])
+    if assessment:
+        score_data.append(["Assessment", assessment])
+    score_table = Table(score_data, colWidths=[1.8 * inch, 4.6 * inch])
+    score_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("BACKGROUND", (1, 0), (1, 0), grade_colour),
+        ("TEXTCOLOR", (1, 0), (1, 0), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+    ]))
+    story.append(score_table)
+    story.append(Spacer(1, 12))
+
+    # AI Analysis
+    if ai_analysis:
+        story.append(Paragraph("AI Analysis", heading_style))
+        if isinstance(ai_analysis, dict):
+            for key, value in ai_analysis.items():
+                story.append(Paragraph(f"<b>{key.replace('_', ' ').title()}:</b> {value}", body_style))
+        else:
+            story.append(Paragraph(str(ai_analysis), body_style))
+        story.append(Spacer(1, 8))
+
+    # Summary
+    if summary and isinstance(summary, dict):
+        story.append(Paragraph("Summary", heading_style))
+        for key, value in summary.items():
+            story.append(Paragraph(f"<b>{key.replace('_', ' ').title()}:</b> {value}", body_style))
+        story.append(Spacer(1, 8))
+
+    # Findings
+    story.append(Paragraph(f"Findings ({len(findings)} total)", heading_style))
+    if findings:
+        sorted_findings = sorted(findings, key=_severity_sort_key)
+        for i, f in enumerate(sorted_findings, 1):
+            sev = f.get("severity", "info")
+            msg = f.get("message") or f.get("description", "No description")
+            sev_color = severity_colour.get(sev, colors.grey)
+
+            # Finding header row
+            header_data = [[f"#{i}", sev.upper(), msg]]
+            header_table = Table(header_data, colWidths=[0.4 * inch, 0.8 * inch, 5.2 * inch])
+            header_table.setStyle(TableStyle([
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("BACKGROUND", (1, 0), (1, 0), sev_color),
+                ("TEXTCOLOR", (1, 0), (1, 0), colors.white),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            story.append(header_table)
+
+            detail_parts = []
+            if f.get("type"):
+                detail_parts.append(f"Type: {f['type']}")
+            if f.get("description") and f.get("description") != msg:
+                detail_parts.append(f"Details: {f['description']}")
+            if f.get("recommendation") or f.get("remediation"):
+                detail_parts.append(f"Recommendation: {f.get('recommendation') or f.get('remediation')}")
+            if f.get("cve"):
+                detail_parts.append(f"CVE: {f['cve']}")
+            if detail_parts:
+                story.append(Paragraph("<br/>".join(detail_parts), body_style))
+            story.append(Spacer(1, 6))
+    else:
+        story.append(Paragraph("No findings detected.", body_style))
+
+    # Footer
+    story.append(Spacer(1, 24))
+    story.append(Paragraph("Generated by CyberLens Security Scanner — https://cyberlensai.com", small_style))
+
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=letter,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+    )
+    doc.build(story)
+
+    return {
+        "success": True,
+        "path": output_path,
+        "url": url,
+        "target_type": target_type,
+        "score": score,
+        "grade": grade,
     }

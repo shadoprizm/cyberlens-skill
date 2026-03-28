@@ -1,19 +1,24 @@
 name: cyberlens
 display_name: "CyberLens Security Scanner"
-version: "1.1.1"
-description: "Scan websites and GitHub repositories for practical security issues before you ship, install, or trust them."
+version: "1.2.0"
+description: "Scan websites, GitHub repositories, and Claw Hub skills for practical security issues before you ship, install, or trust them."
 author: shadoprizm
 license: Apache-2.0
-tags: [security, github-security, repo-security, website-security, appsec, supply-chain]
+tags: [security, github-security, repo-security, website-security, appsec, supply-chain, clawhub, skill-scanning]
 capabilities:
   - web_scanning
   - security_analysis
+  - skill_scanning
+  - report_generation
 tools:
   - connect_account
   - scan_target
+  - scan_skill
   - scan_website
   - scan_repository
   - get_security_score
+  - generate_report
+  - export_report_pdf
   - explain_finding
   - list_scan_rules
 

@@ -1,19 +1,23 @@
 # CyberLens OpenClaw Skill
 
-> Practical security scanning for websites, GitHub repositories, and OpenClaw skills
+> Scan Claw Hub skills, websites, and GitHub repositories for security issues — directly from OpenClaw
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-An [OpenClaw](https://openclaw.com) skill that lets AI agents audit live websites and GitHub repositories for practical security issues before you ship, install, or trust them. Use it to scan websites, inspect repositories you are building, and review OpenClaw skills on GitHub before installation. When connected to a [CyberLens](https://cyberlensai.com) account, scans run through the cloud API with 70+ checks and results match the web dashboard. Website scans fall back to local analysis (~15 checks) without an account.
+An [OpenClaw](https://openclaw.com) skill that lets AI agents scan [Claw Hub](https://clawhub.ai) skills, live websites, and GitHub repositories for practical security issues before you install or trust them. Paste a Claw Hub link, and CyberLens analyses the skill package for vulnerabilities, malicious code, dependency risks, secret leaks, and trust posture problems — powered by the [CyberLens](https://cyberlensai.com) cloud analysis engine. Results include a security score, trust score, AI-powered analysis, and plain-English remediation advice. Get your report rendered in chat or exported as a downloadable PDF.
+
+**Free tier includes 5 scans/month** (2 website + 3 repository/skill) — no credit card required. [Sign up at cyberlensai.com](https://cyberlensai.com)
 
 ## Why Install CyberLens
 
+- **Scan Claw Hub skills before you install them.** Paste a `clawhub.ai` link and get a full security assessment.
 - Scan live websites and GitHub repositories from the same skill.
-- Review OpenClaw skills on GitHub before installation.
-- Catch missing headers, HTTPS problems, insecure forms, dependency risks, and trust posture issues.
+- Catch missing headers, HTTPS problems, insecure forms, dependency risks, malicious code, and trust posture issues.
+- **Get reports in chat or as a PDF** — choose markdown for messaging (Telegram, Discord, Signal) or export a PDF to download, email, or archive.
+- AI-powered analysis explains what the findings mean and what to do about them.
 - Use deeper cloud scans when connected, with a local website fallback when you are not.
-- Get plain-English explanations and remediation advice that agents can act on immediately.
+- **Free scans available** — get started with 5 free scans/month, no account setup required for local website checks.
 
 ## Installation
 
@@ -94,20 +98,35 @@ If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually
 
 ## Tools
 
-### scan_target
+### scan_skill
 
-Scan either a live website or a GitHub repository URL. CyberLens auto-detects the target type.
+Scan a Claw Hub skill before installing it. This is the primary tool for vetting OpenClaw skills from the Claw Hub marketplace.
 
 **Parameters:**
-- `target` (required) -- Website URL or GitHub repository URL
-- `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
-- `timeout` -- Request timeout in seconds (default: 30)
-- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud.
+- `skill_url` (required) -- Claw Hub skill URL (e.g. `https://clawhub.ai/author/skill-name`) or GitHub repository URL for an OpenClaw skill
+- `timeout` -- Request timeout in seconds (default: 60)
 
 **Example prompts:**
+- "Scan https://clawhub.ai/anthropic/tavily-search before I install it"
+- "Is this Claw Hub skill safe? https://clawhub.ai/author/skill-name"
+- "Check this skill for malicious code before I install it"
+
+**Returns:** Security score, trust score, grade (A-F), AI analysis, and detailed findings by category (security, dependencies, trust posture, secrets, malicious code, behavioural, artifacts).
+
+### scan_target
+
+Scan a live website, GitHub repository, or Claw Hub skill URL. CyberLens auto-detects the target type.
+
+**Parameters:**
+- `target` (required) -- Website URL, GitHub repository URL, or Claw Hub skill URL
+- `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
+- `timeout` -- Request timeout in seconds (default: 30)
+- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository and skill scans require cloud.
+
+**Example prompts:**
+- "Scan https://clawhub.ai/author/skill-name for security issues"
 - "Scan https://example.com for security issues"
 - "Scan https://github.com/shadoprizm/cyberlens-skill before I install it"
-- "Review this OpenClaw skill repo for vulnerabilities"
 
 ### connect_account
 
@@ -137,7 +156,7 @@ Scan a website for security vulnerabilities. Uses the cloud API when connected, 
 Scan a GitHub repository URL, including OpenClaw skills before installation.
 
 **Parameters:**
-- `repository_url` (required) -- GitHub repository URL such as `https://github.com/owner/repo`
+- `repository_url` (required) -- GitHub repository URL (e.g. `https://github.com/owner/repo`) or Claw Hub skill URL
 - `timeout` -- Request timeout in seconds (default: 60)
 - `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud access.
 
@@ -148,15 +167,44 @@ Scan a GitHub repository URL, including OpenClaw skills before installation.
 
 **Returns:** Repository security score, trust score, aggregated findings, and the underlying repository assessment sections from CyberLens cloud analysis.
 
+### generate_report
+
+Generate a formatted markdown report from any scan result. Suitable for sharing in Telegram, Discord, Signal, the web UI, or any channel that renders markdown.
+
+**Parameters:**
+- `scan_result` (required) -- The result returned by any CyberLens scan tool
+
+**Example prompts:**
+- "Show me the report in chat"
+- "Give me a summary of the scan results"
+- "Share the findings here"
+
+**Returns:** A clean markdown report with score cards, AI analysis, summary, and severity-sorted findings.
+
+### export_report_pdf
+
+Export scan results as a professionally formatted PDF file with colour-coded severity indicators and full findings detail.
+
+**Parameters:**
+- `scan_result` (required) -- The result returned by any CyberLens scan tool
+- `output_path` (optional) -- Where to save the PDF. Defaults to `~/cyberlens-report-<timestamp>.pdf`
+
+**Example prompts:**
+- "Export that scan as a PDF"
+- "Give me a downloadable report"
+- "Save the results as a PDF file"
+
+**Returns:** Absolute path to the generated PDF file.
+
 ### get_security_score
 
-Quick score check -- faster when you only need the grade. Supports both websites and GitHub repository URLs.
+Quick score check -- faster when you only need the grade. Supports websites, GitHub repositories, and Claw Hub skill URLs.
 
 **Parameters:**
 - `url` (required) -- The URL to check
 - `timeout` -- Request timeout in seconds (default: 30)
 
-**Example prompt:** "What's the security grade for https://example.com?"
+**Example prompt:** "What's the security grade for https://clawhub.ai/author/skill-name?"
 
 ### explain_finding
 
@@ -170,7 +218,7 @@ Get a plain-English explanation of a security finding.
 
 ### list_scan_rules
 
-List all available detection rules organized by category (headers, HTTPS, disclosure, forms).
+List all available detection rules organized by category (headers, HTTPS, disclosure, forms, repository).
 
 ## Cloud vs Local Scanning
 
@@ -180,21 +228,24 @@ List all available detection rules organized by category (headers, HTTPS, disclo
 | Account required | No | Yes |
 | Results match website | No | Yes |
 | Scan history | No | Yes |
+| Claw Hub skill scanning | No | Yes |
 | Repository scanning | No | Yes |
+| AI-powered analysis | No | Yes |
+| PDF report export | Yes (from any result) | Yes (from any result) |
 
-When connected, cloud scanning is used by default. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Repository scanning uses the cloud service and does not have a local fallback.
+When connected, cloud scanning is used by default. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Claw Hub skill scanning and repository scanning use the cloud service and do not have a local fallback.
 
 ## Account Tiers
 
-| Tier | Scans/Month |
-|------|-------------|
-| Free | 5 (2 website + 3 repository) |
-| Starter | 10 |
-| Advanced | 40 |
-| Premium | 100 |
-| Agency | Custom |
+| Tier | Scans/Month | Price |
+|------|-------------|-------|
+| **Free** | **5 (2 website + 3 repo/skill)** | **Free** |
+| Starter | 10 | Paid |
+| Advanced | 40 | Paid |
+| Premium | 100 | Paid |
+| Agency | Custom | Custom |
 
-Sign up at [cyberlensai.com](https://cyberlensai.com).
+**Get started free** — 5 scans/month with no credit card required. Sign up at [cyberlensai.com](https://cyberlensai.com).
 
 ## Project Structure
 
@@ -210,7 +261,7 @@ cyberlens-skill/
   .github/workflows/ci.yml  # Automated test workflow
   src/
     __init__.py         # Package exports
-    tools.py            # Tool implementations (connect, scan, score, explain, rules)
+    tools.py            # Tool implementations (connect, scan, scan_skill, report, PDF, score, explain, rules)
     scanner.py          # Local SecurityScanner (async, httpx + BeautifulSoup)
     api_client.py       # CyberLens cloud API client (async, exponential backoff)
     auth.py             # Browser-based connect flow with secure code exchange
@@ -228,6 +279,7 @@ cyberlens-skill/
 - `beautifulsoup4` -- HTML parsing (for local scanning)
 - `pydantic` -- Data validation
 - `pyyaml` -- Config file handling
+- `reportlab` -- PDF report generation
 
 The local scanner uses Python's built-in `html.parser` via BeautifulSoup, so `lxml` is not required for the default install.
 
