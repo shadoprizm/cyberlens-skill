@@ -18,7 +18,9 @@ Scan websites and GitHub repositories for practical security issues before you s
 
 ## First-Time Setup
 
-Before scanning, the user must connect their CyberLens account. Run the `connect_account` tool. This opens a browser to cyberlensai.com where they sign in or create an account. A short-lived connect code is delivered through the callback, the skill exchanges that code for the real account key over HTTPS, and the key is stored at `~/.openclaw/skills/cyberlens/config.yaml`.
+Before scanning, the user must connect their CyberLens account. Run the `connect_account` tool. This opens a browser to cyberlensai.com where they sign in or create an account. A short-lived connect code is delivered through the callback, the skill exchanges that code for the real account key over HTTPS on official CyberLens hosts, and the key is stored at `~/.openclaw/skills/cyberlens/config.yaml`.
+
+Browser authentication uses `https://cyberlensai.com/connect`. The hosted scan API runs at `https://api.cyberlensai.com/functions/v1/public-api-scan`. If the user needs to override the scan API endpoint explicitly, set `CYBERLENS_API_BASE_URL`.
 
 If the user doesn't have a CyberLens account, direct them to https://cyberlensai.com to sign up. Free tier includes 5 scans/month (2 website + 3 repository). Repository scanning requires a connected account.
 
@@ -26,7 +28,7 @@ If the user doesn't have a CyberLens account, direct them to https://cyberlensai
 
 ### connect_account
 
-Connect or reconnect a CyberLens account. Opens the browser to cyberlensai.com/connect, waits for authentication, and stores the API key locally.
+Connect or reconnect a CyberLens account. Opens the browser to cyberlensai.com/connect, waits for authentication, validates the returned exchange host against official CyberLens infrastructure, and stores the API key locally.
 
 ```bash
 python3 -c "
@@ -42,7 +44,7 @@ Use this when:
 - The user gets an authentication error during scanning
 - The user wants to switch to a different account
 
-If OpenClaw is running on another machine, set `CYBERLENS_CONNECT_CALLBACK_URL` to a browser-reachable callback URL before running `connect_account`. Use `CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` when a reverse proxy or different local bind address is involved. If no callback path is available, the user can still set `CYBERLENS_API_KEY` manually.
+If OpenClaw is running on another machine, set `CYBERLENS_CONNECT_CALLBACK_URL` to a browser-reachable callback URL before running `connect_account`. Use `CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` when a reverse proxy or different local bind address is involved. If no callback path is available, the user can still set `CYBERLENS_API_KEY` manually. If the user prefers not to persist the key on disk, they can keep `CYBERLENS_API_KEY` only in the process environment.
 
 ### scan_target
 

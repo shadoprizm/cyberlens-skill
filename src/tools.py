@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 from .scanner import SecurityScanner
 from .api_client import CyberLensAPIClient
-from .auth import load_api_key, run_connect_flow
+from .auth import load_api_base_url, load_api_key, run_connect_flow
 from .models import (
     ScanResult,
     SecurityScore,
@@ -408,6 +408,7 @@ async def scan_target(
 
     target_type = _classify_target(target)
     api_key = load_api_key()
+    api_base_url = load_api_base_url()
     should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
 
     if target_type == "repository":
@@ -423,7 +424,7 @@ async def scan_target(
             }
 
         try:
-            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+            async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(target)
                 return _format_cloud_scan_result(result, target)
         except Exception as e:
@@ -436,7 +437,7 @@ async def scan_target(
 
     if should_use_cloud and api_key:
         try:
-            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+            async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(target)
                 return _format_cloud_scan_result(result, target)
         except Exception as e:
@@ -567,6 +568,7 @@ async def get_security_score(
 
     target_type = _classify_target(url)
     api_key = load_api_key()
+    api_base_url = load_api_base_url()
 
     if target_type == "repository":
         if not api_key:
@@ -581,7 +583,7 @@ async def get_security_score(
             }
 
         try:
-            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+            async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(url)
                 score = result.get("security_score", 0) or 0
                 grade = _score_to_grade(score)
@@ -606,7 +608,7 @@ async def get_security_score(
 
     if api_key:
         try:
-            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+            async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(url)
                 score = result.get("scores", {}).get("overall", 0)
                 grade = _score_to_grade(score)

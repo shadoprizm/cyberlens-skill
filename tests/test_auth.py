@@ -102,11 +102,11 @@ async def test_exchange_connect_code_returns_full_key(monkeypatch):
 
     key = await auth._exchange_connect_code(
         "clcn_test",
-        "https://example.supabase.co/functions/v1/integration-connect/exchange",
+        "https://api.cyberlensai.com/functions/v1/integration-connect/exchange",
     )
 
     assert key == "clns_acct_test"
-    assert calls["url"] == "https://example.supabase.co/functions/v1/integration-connect/exchange"
+    assert calls["url"] == "https://api.cyberlensai.com/functions/v1/integration-connect/exchange"
     assert calls["json"] == {"code": "clcn_test"}
 
 
@@ -125,5 +125,14 @@ async def test_exchange_connect_code_raises_for_expired_code(monkeypatch):
     with pytest.raises(RuntimeError, match="expired"):
         await auth._exchange_connect_code(
             "clcn_test",
-            "https://example.supabase.co/functions/v1/integration-connect/exchange",
+            "https://api.cyberlensai.com/functions/v1/integration-connect/exchange",
+        )
+
+
+@pytest.mark.asyncio
+async def test_exchange_connect_code_rejects_untrusted_host():
+    with pytest.raises(ValueError, match="untrusted exchange host"):
+        await auth._exchange_connect_code(
+            "clcn_test",
+            "https://evil.example.com/functions/v1/integration-connect/exchange",
         )

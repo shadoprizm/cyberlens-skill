@@ -1,6 +1,6 @@
 name: cyberlens
 display_name: "CyberLens Security Scanner"
-version: "1.1.0"
+version: "1.1.1"
 description: "Scan websites and GitHub repositories for practical security issues before you ship, install, or trust them."
 author: shadoprizm
 license: Apache-2.0
@@ -24,8 +24,8 @@ config:
     description: "CyberLens API key for cloud scanning (auto-set by connect_account)"
   api_base_url:
     type: string
-    default: "https://phodfgfegbwkjhgsdyhc.supabase.co/functions/v1/public-api-scan"
-    description: "CyberLens API base URL"
+    default: "https://api.cyberlensai.com/functions/v1/public-api-scan"
+    description: "Official CyberLens cloud scan API endpoint. Browser auth uses cyberlensai.com; scan traffic goes to api.cyberlensai.com."
   timeout_seconds:
     type: integer
     default: 30
@@ -36,5 +36,5 @@ config:
     description: "Maximum redirects to follow"
   user_agent:
     type: string
-    default: "CyberLens-Skill/1.1.0"
+    default: "CyberLens-Skill/1.1.1"
     description: "User agent string for requests"

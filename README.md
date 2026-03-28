@@ -67,9 +67,10 @@ The first time you use the skill, tell your agent to "connect my CyberLens accou
 4. The skill exchanges that code for your account key over HTTPS
 5. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
 
-No copy-pasting required. The raw account key no longer appears in the browser callback URL. The skill detects the key on subsequent scans and routes through the cloud API automatically.
+No copy-pasting required. The raw account key no longer appears in the browser callback URL. The skill only accepts HTTPS exchange URLs on official CyberLens hosts, then detects the key on subsequent scans and routes through the cloud API automatically.
 
 You can also set the key via environment variable: `CYBERLENS_API_KEY`.
+The browser-based connect flow uses `https://cyberlensai.com/connect`, while the hosted scan API runs at `https://api.cyberlensai.com/functions/v1/public-api-scan`. If you need to override that endpoint explicitly, set `CYBERLENS_API_BASE_URL`.
 
 ### Remote or Server Installs
 
@@ -89,7 +90,7 @@ export CYBERLENS_CONNECT_BIND_PORT="54321"
 
 `CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` are optional. Use them when the skill should listen on a different local interface or port than the public callback endpoint. For hosted HTTPS callbacks, your proxy must forward requests to the bind host and port where the skill is listening.
 
-If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually instead.
+If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually instead. If you do not want the key stored on disk, keep it only in the process environment. When the key is stored locally, the skill writes it with restrictive file permissions where the OS supports them.
 
 ## Tools
 

@@ -6,7 +6,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -14,6 +14,11 @@ import yaml
 
 
 CONNECT_BASE_URL = "https://cyberlensai.com/connect"
+TRUSTED_EXCHANGE_HOSTS = {
+    "cyberlensai.com",
+    "www.cyberlensai.com",
+    "api.cyberlensai.com",
+}
 CONFIG_DIR = Path.home() / ".openclaw" / "skills" / "cyberlens"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
@@ -94,6 +99,41 @@ def _is_loopback_host(hostname: Optional[str]) -> bool:
     return hostname in {"localhost", "127.0.0.1", "::1"}
 
 
+def _is_trusted_exchange_host(hostname: Optional[str]) -> bool:
+    """Return True when the exchange URL host is an official CyberLens host."""
+    if not hostname:
+        return False
+    return hostname in TRUSTED_EXCHANGE_HOSTS or hostname.endswith(".cyberlensai.com")
+
+
+def _load_local_config() -> Dict[str, Any]:
+    """Load the local skill config file if it exists."""
+    if not CONFIG_FILE.exists():
+        return {}
+
+    with open(CONFIG_FILE) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _write_local_config(config: Dict[str, Any]) -> Path:
+    """Write the local skill config with restrictive permissions when supported."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        CONFIG_DIR.chmod(0o700)
+    except OSError:
+        pass
+
+    with open(CONFIG_FILE, "w") as f:
+        yaml.safe_dump(config, f, default_flow_style=False)
+
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+    return CONFIG_FILE
+
+
 def _resolve_callback_config() -> tuple[str, int, str]:
     """Resolve the bind address and callback URL for the connect flow."""
     configured_callback = os.environ.get("CYBERLENS_CONNECT_CALLBACK_URL", "").strip()
@@ -134,6 +174,8 @@ async def _exchange_connect_code(code: str, exchange_url: str) -> str:
     parsed = urlparse(exchange_url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("Invalid exchange URL returned by CyberLens.")
+    if not _is_trusted_exchange_host(parsed.hostname):
+        raise ValueError("CyberLens returned an untrusted exchange host.")
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -165,18 +207,9 @@ async def _exchange_connect_code(code: str, exchange_url: str) -> str:
 
 def save_api_key(key: str) -> Path:
     """Save the API key to the skill config file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-    config = {}
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            config = yaml.safe_load(f) or {}
-
+    config = _load_local_config()
     config["api_key"] = key
-    with open(CONFIG_FILE, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
-
-    return CONFIG_FILE
+    return _write_local_config(config)
 
 
 def load_api_key() -> Optional[str]:
@@ -187,10 +220,18 @@ def load_api_key() -> Optional[str]:
         return env_key
 
     # Check config file
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            config = yaml.safe_load(f) or {}
-            return config.get("api_key")
+    return _load_local_config().get("api_key")
+
+
+def load_api_base_url() -> Optional[str]:
+    """Load a user-configured CyberLens API base URL override."""
+    env_base = os.environ.get("CYBERLENS_API_BASE_URL", "").strip()
+    if env_base:
+        return env_base
+
+    configured_base = _load_local_config().get("api_base_url")
+    if isinstance(configured_base, str) and configured_base.strip():
+        return configured_base.strip()
 
     return None
 

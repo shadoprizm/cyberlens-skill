@@ -190,7 +190,7 @@ class TestScanWebsite:
         monkeypatch.setattr(
             tools,
             "CyberLensAPIClient",
-            lambda api_key, timeout=30.0: _FakeCloudClient(cloud_result),
+            lambda api_key, timeout=30.0, api_base=None: _FakeCloudClient(cloud_result),
         )
 
         result = await tools.scan_website("https://example.com", use_cloud=True)
@@ -269,7 +269,7 @@ class TestScanWebsite:
         monkeypatch.setattr(
             tools,
             "CyberLensAPIClient",
-            lambda api_key, timeout=30.0: _FakeCloudClient(repository_result),
+            lambda api_key, timeout=30.0, api_base=None: _FakeCloudClient(repository_result),
         )
 
         result = await tools.scan_target(
@@ -442,7 +442,7 @@ class TestGetSecurityScore:
         monkeypatch.setattr(
             tools,
             "CyberLensAPIClient",
-            lambda api_key, timeout=30.0: _FakeCloudClient(repository_result),
+            lambda api_key, timeout=30.0, api_base=None: _FakeCloudClient(repository_result),
         )
 
         result = await tools.get_security_score("https://github.com/shadoprizm/cyberlens-skill")

@@ -1,20 +1,32 @@
 """CyberLens API client for cloud-powered scanning."""
 
 import asyncio
+import os
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 
 
-API_BASE = "https://phodfgfegbwkjhgsdyhc.supabase.co/functions/v1/public-api-scan"
+DEFAULT_API_BASE = "https://api.cyberlensai.com/functions/v1/public-api-scan"
+
+
+def _resolve_api_base(api_base: Optional[str] = None) -> str:
+    """Resolve and validate the CyberLens API base URL."""
+    candidate = (api_base or os.environ.get("CYBERLENS_API_BASE_URL") or DEFAULT_API_BASE).strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("CyberLens API base URL must be a valid https:// URL.")
+    return candidate.rstrip("/")
 
 
 class CyberLensAPIClient:
     """Async client for the CyberLens public scan API."""
 
-    def __init__(self, api_key: str, timeout: float = 120.0):
+    def __init__(self, api_key: str, timeout: float = 120.0, api_base: Optional[str] = None):
         self.api_key = api_key
         self.timeout = timeout
+        self.api_base = _resolve_api_base(api_base)
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self):
@@ -34,7 +46,7 @@ class CyberLensAPIClient:
     async def start_scan(self, url: str) -> str:
         """Start a scan and return the scan ID."""
         response = await self._client.post(
-            f"{API_BASE}/scan",
+            f"{self.api_base}/scan",
             json={"url": url},
         )
         response.raise_for_status()
@@ -51,7 +63,7 @@ class CyberLensAPIClient:
             await asyncio.sleep(delay)
             elapsed += delay
 
-            response = await self._client.get(f"{API_BASE}/scan/{scan_id}")
+            response = await self._client.get(f"{self.api_base}/scan/{scan_id}")
             response.raise_for_status()
             data = response.json()["data"]
 
@@ -71,6 +83,6 @@ class CyberLensAPIClient:
 
     async def get_quota(self) -> Dict[str, Any]:
         """Get current usage quota."""
-        response = await self._client.get(f"{API_BASE}/quota")
+        response = await self._client.get(f"{self.api_base}/quota")
         response.raise_for_status()
         return response.json()["data"]
