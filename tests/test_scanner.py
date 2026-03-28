@@ -1,7 +1,45 @@
 """Tests for CyberLens scanner module."""
 
 import pytest
+import httpx
+from src import __version__
+from src import scanner as scanner_module
 from src.scanner import SecurityScanner, Finding, ScanResult
+
+
+class _FakeAsyncClient:
+    """Minimal async HTTP client stub for scanner tests."""
+
+    def __init__(self, response=None, error=None):
+        self._response = response
+        self._error = error
+
+    async def get(self, url):
+        if self._error:
+            raise self._error
+        return self._response
+
+    async def aclose(self):
+        return None
+
+
+def _build_response(url: str, headers=None, text: str = "<html></html>") -> httpx.Response:
+    """Create an httpx response with an attached request and URL."""
+    return httpx.Response(
+        200,
+        headers=headers or {},
+        text=text,
+        request=httpx.Request("GET", url),
+    )
+
+
+def _patch_async_client(monkeypatch, response=None, error=None):
+    """Patch the scanner's AsyncClient factory with a deterministic stub."""
+    monkeypatch.setattr(
+        scanner_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: _FakeAsyncClient(response=response, error=error),
+    )
 
 
 class TestFinding:
@@ -81,7 +119,7 @@ class TestSecurityScannerInit:
         
         assert scanner.timeout == 30.0
         assert scanner.max_redirects == 5
-        assert scanner.user_agent == "CyberLens-Skill/0.1.0"
+        assert scanner.user_agent == f"CyberLens-Skill/{__version__}"
     
     def test_custom_init(self):
         """Test initialization with custom values."""
@@ -266,16 +304,33 @@ class TestInformationDisclosure:
 class TestAsyncScan:
     """Tests for async scan functionality."""
     
-    async def test_scan_valid_url(self):
+    async def test_scan_valid_url(self, monkeypatch):
         """Test scanning a valid URL."""
+        _patch_async_client(
+            monkeypatch,
+            response=_build_response(
+                "https://example.com",
+                headers={
+                    "Content-Security-Policy": "default-src 'self'",
+                    "Strict-Transport-Security": "max-age=31536000",
+                    "X-Frame-Options": "DENY",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "strict-origin",
+                    "Permissions-Policy": "camera=()",
+                    "Server": "nginx",
+                },
+                text="<html><body>Hello</body></html>",
+            ),
+        )
+
         async with SecurityScanner() as scanner:
-            result = await scanner.scan("https://httpbin.org/get")
+            result = await scanner.scan("https://example.com")
             
             assert isinstance(result, ScanResult)
             assert result.error is None
             assert 0 <= result.score <= 100
             assert result.grade in ["A", "B", "C", "D", "F"]
-            assert result.scan_time_ms > 0
+            assert result.scan_time_ms >= 0
     
     async def test_scan_invalid_url(self):
         """Test scanning invalid URL format."""
@@ -285,18 +340,31 @@ class TestAsyncScan:
             assert result.error is not None
             assert "http://" in result.error or "https://" in result.error
     
-    async def test_scan_timeout(self):
+    async def test_scan_timeout(self, monkeypatch):
         """Test scan timeout handling."""
+        _patch_async_client(
+            monkeypatch,
+            error=httpx.TimeoutException("Request timed out"),
+        )
+
         async with SecurityScanner(timeout=0.1) as scanner:
-            result = await scanner.scan("https://httpbin.org/delay/5")
+            result = await scanner.scan("https://example.com/slow")
             
             assert result.error is not None
-            assert "timeout" in result.error.lower()
+            assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
     
-    async def test_get_score(self):
+    async def test_get_score(self, monkeypatch):
         """Test get_score method."""
+        _patch_async_client(
+            monkeypatch,
+            response=_build_response(
+                "https://example.com",
+                headers={"Server": "nginx"},
+            ),
+        )
+
         async with SecurityScanner() as scanner:
-            score, grade = await scanner.get_score("https://httpbin.org/get")
+            score, grade = await scanner.get_score("https://example.com")
             
             assert isinstance(score, int)
             assert 0 <= score <= 100

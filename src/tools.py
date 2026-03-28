@@ -1,6 +1,7 @@
 """Tool function implementations for OpenClaw integration."""
 
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
 from .scanner import SecurityScanner
 from .api_client import CyberLensAPIClient
 from .auth import load_api_key, run_connect_flow
@@ -11,6 +12,39 @@ from .models import (
     FindingExplanation,
     ScanRule,
 )
+
+
+GITHUB_RESERVED_PATHS = {
+    "about",
+    "account",
+    "apps",
+    "collections",
+    "contact",
+    "customer-stories",
+    "enterprise",
+    "events",
+    "explore",
+    "features",
+    "gist",
+    "gists",
+    "issues",
+    "login",
+    "marketplace",
+    "new",
+    "notifications",
+    "orgs",
+    "organizations",
+    "pricing",
+    "pulls",
+    "search",
+    "security",
+    "settings",
+    "site",
+    "sponsors",
+    "topics",
+    "trending",
+    "users",
+}
 
 
 # Finding explanations database
@@ -111,6 +145,209 @@ FINDING_EXPLANATIONS = {
 }
 
 
+def _validate_target_url(target: str) -> Optional[str]:
+    """Validate that the provided target is an HTTP(S) URL."""
+    if not target.startswith(("http://", "https://")):
+        return "URL must start with http:// or https://"
+
+    parsed = urlparse(target)
+    if not parsed.scheme or not parsed.netloc:
+        return "URL must include a valid hostname"
+
+    return None
+
+
+def _classify_target(target: str) -> str:
+    """Classify a scan target as a website or GitHub repository URL."""
+    validation_error = _validate_target_url(target)
+    if validation_error:
+        return "invalid"
+
+    parsed = urlparse(target)
+    host = parsed.netloc.lower()
+    path_parts = [part for part in parsed.path.split("/") if part]
+
+    if host in {"github.com", "www.github.com"} and len(path_parts) >= 2:
+        owner = path_parts[0].lower()
+        repo = path_parts[1]
+        if owner not in GITHUB_RESERVED_PATHS and repo:
+            return "repository"
+
+    return "website"
+
+
+def _normalize_cloud_vulnerabilities(vulnerabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize website vulnerability payloads from the CyberLens cloud API."""
+    return [
+        {
+            "test_id": vulnerability.get("testId") or vulnerability.get("type", "unknown"),
+            "type": vulnerability.get("testId") or vulnerability.get("type", "unknown"),
+            "severity": vulnerability.get("severity", "info"),
+            "message": vulnerability.get("message") or vulnerability.get("title") or vulnerability.get("description", ""),
+            "description": vulnerability.get("message") or vulnerability.get("title") or vulnerability.get("description", ""),
+            "details": vulnerability.get("details") or vulnerability.get("description", ""),
+            "recommendation": vulnerability.get("recommendation", ""),
+            "passed": bool(vulnerability.get("passed", False)),
+        }
+        for vulnerability in vulnerabilities
+    ]
+
+
+def _flatten_repository_findings(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Flatten repository scan sections into a single findings list."""
+    findings: List[Dict[str, Any]] = []
+
+    for finding in result.get("security_findings", []) or []:
+        findings.append({
+            "source_section": "security_findings",
+            "type": finding.get("test_id") or finding.get("category") or "repository-security-finding",
+            "test_id": finding.get("test_id"),
+            "severity": finding.get("severity", "info"),
+            "confidence": finding.get("confidence"),
+            "message": finding.get("message", ""),
+            "description": finding.get("details") or finding.get("message", ""),
+            "details": finding.get("details"),
+            "recommendation": finding.get("recommendation"),
+            "category": finding.get("category"),
+            "cve": finding.get("cve"),
+        })
+
+    for finding in result.get("dependency_vulnerabilities", []) or []:
+        package_name = finding.get("package_name", "unknown")
+        current_version = finding.get("current_version", "unknown")
+        findings.append({
+            "source_section": "dependency_vulnerabilities",
+            "type": "dependency-vulnerability",
+            "severity": finding.get("severity", "info"),
+            "message": f"{package_name}@{current_version} may have vulnerabilities",
+            "description": finding.get("remediation", ""),
+            "details": f"Current version: {current_version}",
+            "recommendation": finding.get("remediation"),
+            "package_name": package_name,
+            "current_version": current_version,
+            "patched_version": finding.get("patched_version"),
+            "cve_ids": finding.get("cve_ids", []),
+        })
+
+    for finding in result.get("trust_posture_findings", []) or []:
+        findings.append({
+            "source_section": "trust_posture_findings",
+            "type": "trust-posture",
+            "severity": finding.get("severity", "info"),
+            "message": finding.get("title") or finding.get("message", ""),
+            "description": finding.get("message", ""),
+            "details": finding.get("message"),
+            "recommendation": finding.get("remediation"),
+            "classification": finding.get("classification"),
+        })
+
+    for section_name in (
+        "secret_findings",
+        "behavioral_findings",
+        "malicious_code_findings",
+        "malicious_package_findings",
+        "artifact_findings",
+    ):
+        for finding in result.get(section_name, []) or []:
+            findings.append({
+                "source_section": section_name,
+                "type": finding.get("type") or finding.get("title") or section_name.rstrip("s"),
+                "severity": finding.get("severity", "info"),
+                "message": finding.get("message") or finding.get("title", ""),
+                "description": finding.get("details") or finding.get("message") or finding.get("title", ""),
+                "details": finding.get("details"),
+                "recommendation": finding.get("recommendation") or finding.get("remediation"),
+            })
+
+    return findings
+
+
+def _is_repository_scan_result(result: Dict[str, Any]) -> bool:
+    """Return True when a cloud result matches the repository assessment schema."""
+    return result.get("report_type") == "repository_security_assessment" or any(
+        key in result
+        for key in (
+            "security_findings",
+            "dependency_vulnerabilities",
+            "trust_posture_findings",
+            "repository",
+        )
+    )
+
+
+def _format_repository_cloud_result(result: Dict[str, Any], target: str) -> Dict[str, Any]:
+    """Format a repository assessment response from the CyberLens cloud API."""
+    security_score = result.get("security_score", 0) or 0
+    grade = _score_to_grade(security_score)
+    findings = _flatten_repository_findings(result)
+    findings_count = result.get("summary", {}).get("total_findings")
+    if not isinstance(findings_count, int):
+        findings_count = len(findings)
+
+    return {
+        "success": True,
+        "source": "cloud",
+        "target_type": "repository",
+        "url": result.get("target", target),
+        "score": security_score,
+        "security_score": security_score,
+        "trust_score": result.get("trust_score"),
+        "grade": grade,
+        "assessment": _get_grade_assessment(grade),
+        "report_type": result.get("report_type", "repository_security_assessment"),
+        "generated_at": result.get("generated_at"),
+        "scan_date": result.get("scan_date"),
+        "scan_type": result.get("scan_type"),
+        "findings_count": findings_count,
+        "summary": result.get("summary", {}),
+        "repository": result.get("repository", {}),
+        "ai_analysis": result.get("ai_analysis"),
+        "findings": findings,
+        "security_findings": result.get("security_findings", []),
+        "dependency_vulnerabilities": result.get("dependency_vulnerabilities", []),
+        "trust_posture_findings": result.get("trust_posture_findings", []),
+        "secret_findings": result.get("secret_findings", []),
+        "behavioral_findings": result.get("behavioral_findings", []),
+        "malicious_code_findings": result.get("malicious_code_findings", []),
+        "malicious_package_findings": result.get("malicious_package_findings", []),
+        "artifact_findings": result.get("artifact_findings", []),
+    }
+
+
+def _format_website_cloud_result(result: Dict[str, Any], target: str) -> Dict[str, Any]:
+    """Format a website scan response from the CyberLens cloud API."""
+    vulnerabilities = result.get("vulnerabilities", []) or []
+    findings_count = result.get("summary", {}).get("vulnerabilities_found")
+    if not isinstance(findings_count, int):
+        findings_count = len(vulnerabilities)
+
+    return {
+        "success": True,
+        "source": "cloud",
+        "target_type": "website",
+        "url": result.get("url", target),
+        "score": result.get("scores", {}).get("overall", 0),
+        "grade": _score_to_grade(result.get("scores", {}).get("overall", 0)),
+        "scan_type": result.get("scan_type"),
+        "started_at": result.get("started_at"),
+        "completed_at": result.get("completed_at"),
+        "findings_count": findings_count,
+        "summary": result.get("summary", {}),
+        "ssl_info": result.get("ssl_info", {}),
+        "headers_analysis": result.get("headers_analysis", {}),
+        "database_passive_results": result.get("database_passive_results", []),
+        "ai_insights": result.get("ai_insights"),
+        "findings": _normalize_cloud_vulnerabilities(vulnerabilities),
+    }
+
+
+def _format_cloud_scan_result(result: Dict[str, Any], target: str) -> Dict[str, Any]:
+    """Format a CyberLens cloud result for either websites or repositories."""
+    if _is_repository_scan_result(result):
+        return _format_repository_cloud_result(result, target)
+    return _format_website_cloud_result(result, target)
+
+
 async def connect_account() -> Dict[str, Any]:
     """
     Connect your CyberLens account for cloud-powered scanning.
@@ -144,6 +381,108 @@ async def connect_account() -> Dict[str, Any]:
         }
 
 
+async def scan_target(
+    target: str,
+    scan_depth: str = "standard",
+    timeout: float = 30.0,
+    use_cloud: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Scan a live website or GitHub repository URL.
+
+    Website targets can use the CyberLens cloud API or the local fallback engine.
+    GitHub repository targets use the CyberLens cloud API and require an account.
+
+    Args:
+        target: Website URL or GitHub repository URL
+        scan_depth: How thorough the scan should be ("quick", "standard", "deep")
+        timeout: Request timeout in seconds
+        use_cloud: Force cloud (True) or local (False) scanning. None = auto-detect.
+
+    Returns:
+        Dictionary with scan results tailored to the detected target type
+    """
+    validation_error = _validate_target_url(target)
+    if validation_error:
+        return {"success": False, "error": validation_error, "url": target}
+
+    target_type = _classify_target(target)
+    api_key = load_api_key()
+    should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
+
+    if target_type == "repository":
+        if not (should_use_cloud and api_key):
+            return {
+                "success": False,
+                "target_type": "repository",
+                "url": target,
+                "error": (
+                    "Repository scanning requires a connected CyberLens account. "
+                    "Run connect_account or set CYBERLENS_API_KEY."
+                ),
+            }
+
+        try:
+            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+                result = await client.scan(target)
+                return _format_cloud_scan_result(result, target)
+        except Exception as e:
+            return {
+                "success": False,
+                "target_type": "repository",
+                "url": target,
+                "error": f"Cloud repository scan failed: {e}",
+            }
+
+    if should_use_cloud and api_key:
+        try:
+            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+                result = await client.scan(target)
+                return _format_cloud_scan_result(result, target)
+        except Exception as e:
+            if use_cloud is True:
+                return {
+                    "success": False,
+                    "target_type": "website",
+                    "error": f"Cloud scan failed: {e}",
+                    "url": target,
+                }
+            # Fall through to local website scan
+
+    async with SecurityScanner(timeout=timeout) as scanner:
+        result = await scanner.scan(target)
+
+        if result.error:
+            return {
+                "success": False,
+                "target_type": "website",
+                "error": result.error,
+                "url": result.url,
+            }
+
+        return {
+            "success": True,
+            "source": "local",
+            "target_type": "website",
+            "url": result.url,
+            "score": result.score,
+            "grade": result.grade,
+            "scan_time_ms": result.scan_time_ms,
+            "technologies": result.technologies,
+            "findings_count": len(result.findings),
+            "findings": [
+                {
+                    "type": f.type,
+                    "severity": f.severity,
+                    "description": f.description,
+                    "remediation": f.remediation,
+                    "evidence": f.evidence,
+                }
+                for f in result.findings
+            ],
+        }
+
+
 async def scan_website(
     url: str,
     scan_depth: str = "standard",
@@ -165,79 +504,45 @@ async def scan_website(
     Returns:
         Dictionary with scan results including score, grade, and findings
     """
-    api_key = load_api_key()
-    should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
+    return await scan_target(
+        target=url,
+        scan_depth=scan_depth,
+        timeout=timeout,
+        use_cloud=use_cloud,
+    )
 
-    if should_use_cloud and api_key:
-        try:
-            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
-                result = await client.scan(url)
-                vulnerabilities = result.get("vulnerabilities", []) or []
-                findings_count = result.get("summary", {}).get("vulnerabilities_found")
-                if not isinstance(findings_count, int):
-                    findings_count = len(vulnerabilities)
 
-                return {
-                    "success": True,
-                    "source": "cloud",
-                    "url": result.get("url", url),
-                    "score": result.get("scores", {}).get("overall", 0),
-                    "grade": _score_to_grade(result.get("scores", {}).get("overall", 0)),
-                    "scan_type": result.get("scan_type"),
-                    "started_at": result.get("started_at"),
-                    "completed_at": result.get("completed_at"),
-                    "findings_count": findings_count,
-                    "summary": result.get("summary", {}),
-                    "ssl_info": result.get("ssl_info", {}),
-                    "headers_analysis": result.get("headers_analysis", {}),
-                    "database_passive_results": result.get("database_passive_results", []),
-                    "ai_insights": result.get("ai_insights"),
-                    "findings": [
-                        {
-                            "test_id": v.get("testId") or v.get("type", "unknown"),
-                            "type": v.get("testId") or v.get("type", "unknown"),
-                            "severity": v.get("severity", "info"),
-                            "message": v.get("message") or v.get("title") or v.get("description", ""),
-                            "description": v.get("message") or v.get("title") or v.get("description", ""),
-                            "details": v.get("details") or v.get("description", ""),
-                            "recommendation": v.get("recommendation", ""),
-                            "passed": bool(v.get("passed", False)),
-                        }
-                        for v in vulnerabilities
-                    ],
-                }
-        except Exception as e:
-            if use_cloud is True:
-                return {"success": False, "error": f"Cloud scan failed: {e}", "url": url}
-            # Fall through to local scan
+async def scan_repository(
+    repository_url: str,
+    timeout: float = 60.0,
+    use_cloud: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Scan a GitHub repository URL with CyberLens cloud analysis.
 
-    # Local scanning fallback
-    async with SecurityScanner(timeout=timeout) as scanner:
-        result = await scanner.scan(url)
+    Args:
+        repository_url: GitHub repository URL such as https://github.com/owner/repo
+        timeout: Request timeout in seconds
+        use_cloud: Force cloud behavior. Repository scanning requires cloud access.
 
-        if result.error:
-            return {"success": False, "error": result.error, "url": result.url}
-
+    Returns:
+        Dictionary with repository security findings, scores, and summary
+    """
+    if _classify_target(repository_url) != "repository":
         return {
-            "success": True,
-            "source": "local",
-            "url": result.url,
-            "score": result.score,
-            "grade": result.grade,
-            "scan_time_ms": result.scan_time_ms,
-            "technologies": result.technologies,
-            "findings_count": len(result.findings),
-            "findings": [
-                {
-                    "type": f.type,
-                    "severity": f.severity,
-                    "description": f.description,
-                    "remediation": f.remediation,
-                    "evidence": f.evidence,
-                }
-                for f in result.findings
-            ],
+            "success": False,
+            "error": (
+                "Repository URL must be a GitHub repository URL like "
+                "https://github.com/owner/repo"
+            ),
+            "url": repository_url,
         }
+
+    return await scan_target(
+        target=repository_url,
+        timeout=timeout,
+        use_cloud=use_cloud,
+    )
 
 
 async def get_security_score(
@@ -256,7 +561,48 @@ async def get_security_score(
     Returns:
         Dictionary with score and grade
     """
+    validation_error = _validate_target_url(url)
+    if validation_error:
+        return {"success": False, "error": validation_error, "url": url}
+
+    target_type = _classify_target(url)
     api_key = load_api_key()
+
+    if target_type == "repository":
+        if not api_key:
+            return {
+                "success": False,
+                "target_type": "repository",
+                "url": url,
+                "error": (
+                    "Repository scoring requires a connected CyberLens account. "
+                    "Run connect_account or set CYBERLENS_API_KEY."
+                ),
+            }
+
+        try:
+            async with CyberLensAPIClient(api_key, timeout=timeout) as client:
+                result = await client.scan(url)
+                score = result.get("security_score", 0) or 0
+                grade = _score_to_grade(score)
+                return {
+                    "success": True,
+                    "source": "cloud",
+                    "target_type": "repository",
+                    "url": result.get("target", url),
+                    "score": score,
+                    "security_score": score,
+                    "trust_score": result.get("trust_score"),
+                    "grade": grade,
+                    "assessment": _get_grade_assessment(grade),
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "target_type": "repository",
+                "url": url,
+                "error": f"Cloud repository scoring failed: {e}",
+            }
 
     if api_key:
         try:
@@ -267,6 +613,7 @@ async def get_security_score(
                 return {
                     "success": True,
                     "source": "cloud",
+                    "target_type": "website",
                     "url": url,
                     "score": score,
                     "grade": grade,
@@ -276,14 +623,23 @@ async def get_security_score(
             pass  # Fall through to local
 
     async with SecurityScanner(timeout=timeout) as scanner:
-        score, grade = await scanner.get_score(url)
+        result = await scanner.scan(url)
+        if result.error:
+            return {
+                "success": False,
+                "target_type": "website",
+                "url": result.url,
+                "error": result.error,
+            }
+
         return {
             "success": True,
             "source": "local",
-            "url": url,
-            "score": score,
-            "grade": grade,
-            "assessment": _get_grade_assessment(grade),
+            "target_type": "website",
+            "url": result.url,
+            "score": result.score,
+            "grade": result.grade,
+            "assessment": _get_grade_assessment(result.grade),
         }
 
 
@@ -385,6 +741,15 @@ def list_scan_rules() -> Dict[str, Any]:
             "rules": [
                 {"name": "csrf-protection", "severity": "medium"},
                 {"name": "secure-form-action", "severity": "high"},
+            ],
+        },
+        "repository": {
+            "description": "Cloud repository scanning categories for GitHub repositories and OpenClaw skills",
+            "rules": [
+                {"name": "dependency-vulnerabilities", "severity": "high"},
+                {"name": "trust-posture", "severity": "medium"},
+                {"name": "secret-detection", "severity": "high"},
+                {"name": "malicious-package-review", "severity": "high"},
             ],
         },
     }

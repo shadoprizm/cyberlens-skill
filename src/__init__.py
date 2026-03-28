@@ -1,12 +1,14 @@
-"""CyberLens OpenClaw Skill - Website Security Scanner"""
+"""CyberLens OpenClaw Skill - Security Scanner for websites and repositories."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "shadoprizm"
 
 from .scanner import SecurityScanner
 from .tools import (
     connect_account,
+    scan_target,
     scan_website,
+    scan_repository,
     get_security_score,
     explain_finding,
     list_scan_rules,
@@ -24,7 +26,9 @@ __all__ = [
     "SecurityScanner",
     "CyberLensAPIClient",
     "connect_account",
+    "scan_target",
     "scan_website",
+    "scan_repository",
     "get_security_score",
     "explain_finding",
     "list_scan_rules",

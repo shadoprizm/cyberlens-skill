@@ -1,12 +1,12 @@
 ---
 name: cyberlens
-description: Audit live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other web security issues using CyberLens cloud or local scanning.
+description: Scan websites and GitHub repositories for practical security issues using CyberLens cloud analysis and local web fallback checks.
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "primaryEnv": "CYBERLENS_API_KEY", "emoji": "\ud83d\udd12", "homepage": "https://cyberlensai.com"}}
 ---
 
 # CyberLens Security Scanner
 
-Scan live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other common web security issues. Results include a 0-100 security score, letter grade (A-F), and plain-English remediation advice. When connected to cyberlensai.com, the skill runs a deeper 70+ check cloud scan and falls back to local analysis when needed.
+Scan websites and GitHub repositories for practical security issues before you ship, install, or trust them. CyberLens can audit live web targets for missing headers, HTTPS weaknesses, exposed technologies, and insecure forms, and it can also scan repositories and OpenClaw skills hosted on GitHub through the CyberLens cloud service. Results include a 0-100 security score, letter grade (A-F), and plain-English remediation advice.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Scan live websites for missing security headers, HTTPS weaknesses, exposed techn
 
 Before scanning, the user must connect their CyberLens account. Run the `connect_account` tool. This opens a browser to cyberlensai.com where they sign in or create an account. A short-lived connect code is delivered through the callback, the skill exchanges that code for the real account key over HTTPS, and the key is stored at `~/.openclaw/skills/cyberlens/config.yaml`.
 
-If the user doesn't have a CyberLens account, direct them to https://cyberlensai.com to sign up. Free tier includes 5 scans/month (2 website + 3 repository).
+If the user doesn't have a CyberLens account, direct them to https://cyberlensai.com to sign up. Free tier includes 5 scans/month (2 website + 3 repository). Repository scanning requires a connected account.
 
 ## Tools
 
@@ -44,9 +44,28 @@ Use this when:
 
 If OpenClaw is running on another machine, set `CYBERLENS_CONNECT_CALLBACK_URL` to a browser-reachable callback URL before running `connect_account`. Use `CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` when a reverse proxy or different local bind address is involved. If no callback path is available, the user can still set `CYBERLENS_API_KEY` manually.
 
+### scan_target
+
+Scan either a live website or a GitHub repository URL. CyberLens auto-detects the target type. Website scans can use the local fallback engine. Repository scans require the CyberLens cloud API.
+
+Parameters:
+- `target` (required): Website URL or GitHub repository URL
+- `scan_depth`: "quick", "standard" (default), or "deep"
+- `timeout`: Request timeout in seconds (default: 30)
+- `use_cloud`: Force cloud (true) or local (false) scanning. Repository scans require cloud.
+
+```bash
+python3 -c "
+import asyncio
+from cyberlens_skill.src.tools import scan_target
+result = asyncio.run(scan_target('https://github.com/shadoprizm/cyberlens-skill'))
+print(result)
+"
+```
+
 ### scan_website
 
-Scan a website URL for security vulnerabilities. Uses the CyberLens cloud API when connected (70+ checks), falls back to local scanning if not.
+Scan a website URL for security vulnerabilities. Uses the CyberLens cloud API when connected (70+ checks), falls back to local scanning if not. For repository URLs, use `scan_target` or `scan_repository`.
 
 Parameters:
 - `url` (required): The website URL to scan (must include https:// or http://)
@@ -65,9 +84,27 @@ print(result)
 
 Returns: score (0-100), grade (A-F), findings with severity/description/remediation, and scan source (cloud or local).
 
+### scan_repository
+
+Scan a GitHub repository URL, including OpenClaw skills before installation. Repository scans use the CyberLens cloud API and return repository findings, dependency alerts, trust posture findings, and security/trust scores.
+
+Parameters:
+- `repository_url` (required): GitHub repository URL such as `https://github.com/owner/repo`
+- `timeout`: Request timeout in seconds (default: 60)
+- `use_cloud`: Force cloud behavior. Repository scans require cloud access.
+
+```bash
+python3 -c "
+import asyncio
+from cyberlens_skill.src.tools import scan_repository
+result = asyncio.run(scan_repository('https://github.com/shadoprizm/cyberlens-skill'))
+print(result)
+"
+```
+
 ### get_security_score
 
-Quick security score check. Faster than a full scan when only the score is needed.
+Quick security score check. Faster than a full scan when you only need the grade. For GitHub repositories, this returns the repository security score from the CyberLens cloud report.
 
 Parameters:
 - `url` (required): The website URL to check
@@ -109,6 +146,7 @@ List all available scan rules organized by category (headers, https, disclosure,
 ## Notes
 
 - Cloud scanning is more thorough than local (70+ checks vs ~15 local checks)
+- Repository and OpenClaw skill scanning require a connected CyberLens account
 - If the API key is invalid or expired, suggest running `connect_account` again
 - Scan results from the cloud match exactly what cyberlensai.com shows
-- Local fallback scanning works without an account but has fewer checks
+- Local fallback scanning works for website targets without an account but has fewer checks

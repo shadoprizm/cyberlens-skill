@@ -1,17 +1,18 @@
 # CyberLens OpenClaw Skill
 
-> Website security scanning for OpenClaw AI agents
+> Practical security scanning for websites, GitHub repositories, and OpenClaw skills
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-An [OpenClaw](https://openclaw.com) skill that lets AI agents audit live websites for missing security headers, HTTPS weaknesses, exposed technologies, insecure forms, and other common web security issues. When connected to a [CyberLens](https://cyberlensai.com) account, scans run through the cloud API with 70+ checks and results match the web dashboard. Falls back to local scanning (~15 checks) without an account.
+An [OpenClaw](https://openclaw.com) skill that lets AI agents audit live websites and GitHub repositories for practical security issues before you ship, install, or trust them. Use it to scan websites, inspect repositories you are building, and review OpenClaw skills on GitHub before installation. When connected to a [CyberLens](https://cyberlensai.com) account, scans run through the cloud API with 70+ checks and results match the web dashboard. Website scans fall back to local analysis (~15 checks) without an account.
 
 ## Why Install CyberLens
 
-- Scan any live website and get a fast security score with a clear letter grade.
-- Catch missing headers, HTTPS problems, insecure form actions, and information disclosure issues.
-- Use deeper cloud scans when connected, with a local fallback when you are not.
+- Scan live websites and GitHub repositories from the same skill.
+- Review OpenClaw skills on GitHub before installation.
+- Catch missing headers, HTTPS problems, insecure forms, dependency risks, and trust posture issues.
+- Use deeper cloud scans when connected, with a local website fallback when you are not.
 - Get plain-English explanations and remediation advice that agents can act on immediately.
 
 ## Installation
@@ -92,6 +93,21 @@ If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually
 
 ## Tools
 
+### scan_target
+
+Scan either a live website or a GitHub repository URL. CyberLens auto-detects the target type.
+
+**Parameters:**
+- `target` (required) -- Website URL or GitHub repository URL
+- `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
+- `timeout` -- Request timeout in seconds (default: 30)
+- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud.
+
+**Example prompts:**
+- "Scan https://example.com for security issues"
+- "Scan https://github.com/shadoprizm/cyberlens-skill before I install it"
+- "Review this OpenClaw skill repo for vulnerabilities"
+
 ### connect_account
 
 Connect or reconnect your CyberLens account for cloud-powered scanning.
@@ -115,9 +131,25 @@ Scan a website for security vulnerabilities. Uses the cloud API when connected, 
 
 **Returns:** Score (0-100), grade (A-F), findings with severity/description/remediation, and scan source (cloud or local).
 
+### scan_repository
+
+Scan a GitHub repository URL, including OpenClaw skills before installation.
+
+**Parameters:**
+- `repository_url` (required) -- GitHub repository URL such as `https://github.com/owner/repo`
+- `timeout` -- Request timeout in seconds (default: 60)
+- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud access.
+
+**Example prompts:**
+- "Scan https://github.com/shadoprizm/cyberlens-skill for repo vulnerabilities"
+- "Audit this OpenClaw skill before I install it"
+- "Check my GitHub repo for security issues"
+
+**Returns:** Repository security score, trust score, aggregated findings, and the underlying repository assessment sections from CyberLens cloud analysis.
+
 ### get_security_score
 
-Quick score check -- faster when you only need the grade.
+Quick score check -- faster when you only need the grade. Supports both websites and GitHub repository URLs.
 
 **Parameters:**
 - `url` (required) -- The URL to check
@@ -149,7 +181,7 @@ List all available detection rules organized by category (headers, HTTPS, disclo
 | Scan history | No | Yes |
 | Repository scanning | No | Yes |
 
-When connected, cloud scanning is used by default. If the cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set.
+When connected, cloud scanning is used by default. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Repository scanning uses the cloud service and does not have a local fallback.
 
 ## Account Tiers
 

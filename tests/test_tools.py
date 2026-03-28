@@ -1,6 +1,8 @@
 """Tests for CyberLens skill tools."""
 
 import pytest
+from src.scanner import Finding as LocalFinding
+from src.scanner import ScanResult as LocalScanResult
 from src.tools import (
     explain_finding,
     list_scan_rules,
@@ -9,6 +11,20 @@ from src.tools import (
 
 
 class _FakeCloudClient:
+    def __init__(self, result):
+        self._result = result
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def scan(self, url):
+        return self._result
+
+
+class _FakeLocalScanner:
     def __init__(self, result):
         self._result = result
 
@@ -201,12 +217,134 @@ class TestScanWebsite:
             "passed": False,
         }
 
-    async def test_scan_valid_https_site(self):
+    async def test_cloud_scan_supports_repository_reports(self, monkeypatch):
+        """Test that repository reports are surfaced explicitly when scanning GitHub URLs."""
+        from src import tools
+
+        repository_result = {
+            "report_type": "repository_security_assessment",
+            "target": "https://github.com/shadoprizm/cyberlens-skill",
+            "security_score": 92,
+            "trust_score": 98,
+            "scan_type": "agency",
+            "summary": {
+                "total_findings": 2,
+                "dependency_alerts": 1,
+                "trust_posture_issues": 1,
+            },
+            "repository": {
+                "provider": "github",
+                "owner": "shadoprizm",
+                "name": "cyberlens-skill",
+            },
+            "security_findings": [
+                {
+                    "test_id": "openclaw_vulnerable_dependencies",
+                    "severity": "high",
+                    "confidence": "confirmed",
+                    "message": "Project has package files that should be checked for vulnerabilities",
+                    "details": "requirements.txt",
+                    "recommendation": "Run a full dependency vulnerability scan.",
+                    "category": "openclaw_behavior",
+                }
+            ],
+            "trust_posture_findings": [
+                {
+                    "title": "Missing: SECURITY.md or security policy",
+                    "message": "No SECURITY.md — no clear way to report vulnerabilities",
+                    "severity": "info",
+                    "remediation": "Add a SECURITY.md with vulnerability disclosure instructions.",
+                    "classification": "weak_trust",
+                }
+            ],
+            "dependency_vulnerabilities": [],
+            "secret_findings": [],
+            "behavioral_findings": [],
+            "malicious_code_findings": [],
+            "malicious_package_findings": [],
+            "artifact_findings": [],
+        }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0: _FakeCloudClient(repository_result),
+        )
+
+        result = await tools.scan_target(
+            "https://github.com/shadoprizm/cyberlens-skill",
+            use_cloud=True,
+        )
+
+        assert result["success"] is True
+        assert result["source"] == "cloud"
+        assert result["target_type"] == "repository"
+        assert result["security_score"] == 92
+        assert result["trust_score"] == 98
+        assert result["score"] == 92
+        assert result["grade"] == "A"
+        assert result["findings_count"] == 2
+        assert result["repository"] == {
+            "provider": "github",
+            "owner": "shadoprizm",
+            "name": "cyberlens-skill",
+        }
+        assert result["findings"][0]["source_section"] == "security_findings"
+        assert result["findings"][0]["type"] == "openclaw_vulnerable_dependencies"
+        assert result["findings"][1]["source_section"] == "trust_posture_findings"
+        assert result["findings"][1]["type"] == "trust-posture"
+
+    async def test_scan_repository_requires_github_url(self):
+        """Test repository scans reject non-GitHub URLs."""
+        from src.tools import scan_repository
+
+        result = await scan_repository("https://example.com")
+
+        assert result["success"] is False
+        assert "GitHub repository URL" in result["error"]
+
+    async def test_scan_repository_requires_cloud_access(self, monkeypatch):
+        """Test repository scans fail cleanly when the account is not connected."""
+        from src import tools
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+
+        result = await tools.scan_repository("https://github.com/shadoprizm/cyberlens-skill")
+
+        assert result["success"] is False
+        assert result["target_type"] == "repository"
+        assert "requires a connected CyberLens account" in result["error"]
+
+    async def test_scan_valid_https_site(self, monkeypatch):
         """Test scanning a valid HTTPS site."""
-        from src.tools import scan_website
-        
-        result = await scan_website("https://httpbin.org/get")
-        
+        from src import tools
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com",
+                    score=88,
+                    grade="B",
+                    findings=[
+                        LocalFinding(
+                            type="missing-csp",
+                            severity="medium",
+                            description="Content-Security-Policy header is missing",
+                            remediation="Add a CSP header.",
+                        )
+                    ],
+                    technologies=["nginx"],
+                    scan_time_ms=12,
+                )
+            ),
+        )
+
+        result = await tools.scan_website("https://example.com")
+
         assert result["success"] is True
         assert "url" in result
         assert "score" in result
@@ -233,37 +371,109 @@ class TestScanWebsite:
         assert result["success"] is False
         assert "error" in result
     
-    async def test_scan_with_timeout(self):
+    async def test_scan_with_timeout(self, monkeypatch):
         """Test scan respects timeout parameter."""
-        from src.tools import scan_website
-        
-        result = await scan_website("https://httpbin.org/delay/10", timeout=0.1)
-        
+        from src import tools
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com/slow",
+                    score=0,
+                    grade="F",
+                    findings=[],
+                    error="Request timed out after 0.1s",
+                )
+            ),
+        )
+
+        result = await tools.scan_website("https://example.com/slow", timeout=0.1)
+
         assert result["success"] is False
-        assert "timeout" in result["error"].lower()
+        assert "timeout" in result["error"].lower() or "timed out" in result["error"].lower()
 
 
 @pytest.mark.asyncio
 class TestGetSecurityScore:
     """Tests for get_security_score async tool."""
     
-    async def test_get_score_returns_data(self):
+    async def test_get_score_returns_data(self, monkeypatch):
         """Test get_security_score returns expected fields."""
-        from src.tools import get_security_score
-        
-        result = await get_security_score("https://httpbin.org/get")
-        
+        from src import tools
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com",
+                    score=91,
+                    grade="A",
+                    findings=[],
+                    scan_time_ms=9,
+                )
+            ),
+        )
+
+        result = await tools.get_security_score("https://example.com")
+
         assert result["success"] is True
         assert "url" in result
         assert "score" in result
         assert "grade" in result
         assert "assessment" in result
+
+    async def test_get_score_supports_repository_reports(self, monkeypatch):
+        """Test repository score requests use the repository security score from cloud results."""
+        from src import tools
+
+        repository_result = {
+            "report_type": "repository_security_assessment",
+            "target": "https://github.com/shadoprizm/cyberlens-skill",
+            "security_score": 88,
+            "trust_score": 97,
+        }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0: _FakeCloudClient(repository_result),
+        )
+
+        result = await tools.get_security_score("https://github.com/shadoprizm/cyberlens-skill")
+
+        assert result["success"] is True
+        assert result["target_type"] == "repository"
+        assert result["score"] == 88
+        assert result["security_score"] == 88
+        assert result["trust_score"] == 97
+        assert result["grade"] == "B"
     
-    async def test_score_matches_grade(self):
+    async def test_score_matches_grade(self, monkeypatch):
         """Test score and grade are consistent."""
-        from src.tools import get_security_score
-        
-        result = await get_security_score("https://httpbin.org/get")
+        from src import tools
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com",
+                    score=78,
+                    grade="C",
+                    findings=[],
+                    scan_time_ms=11,
+                )
+            ),
+        )
+
+        result = await tools.get_security_score("https://example.com")
         score = result["score"]
         grade = result["grade"]
         
