@@ -14,6 +14,7 @@ import yaml
 
 
 CONNECT_BASE_URL = "https://cyberlensai.com/connect"
+PRICING_BASE_URL = "https://www.cyberlensai.com/pricing"
 TRUSTED_EXCHANGE_HOSTS = {
     "cyberlensai.com",
     "www.cyberlensai.com",
@@ -210,6 +211,21 @@ def save_api_key(key: str) -> Path:
     config = _load_local_config()
     config["api_key"] = key
     return _write_local_config(config)
+
+
+def build_upgrade_url(quota_type: str = "combined") -> str:
+    """Build the public pricing URL for quota upgrade prompts."""
+    query = urlencode({
+        "source": "openclaw-skill-quota-exceeded",
+        "quota_type": quota_type,
+    })
+    return f"{PRICING_BASE_URL}?{query}#plans"
+
+
+def open_upgrade_page(upgrade_url: str) -> None:
+    """Open the CyberLens pricing page in the user's browser."""
+    print(f"Open CyberLens pricing to upgrade: {upgrade_url}")
+    webbrowser.open(upgrade_url)
 
 
 def load_api_key() -> Optional[str]:

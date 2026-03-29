@@ -11,6 +11,25 @@ import httpx
 DEFAULT_API_BASE = "https://api.cyberlensai.com/functions/v1/public-api-scan"
 
 
+class CyberLensQuotaExceededError(RuntimeError):
+    """Raised when the CyberLens public API reports exhausted scan quota."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        upgrade_url: Optional[str] = None,
+        quota_type: Optional[str] = None,
+        used: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.upgrade_url = upgrade_url
+        self.quota_type = quota_type
+        self.used = used
+        self.limit = limit
+
+
 def _resolve_api_base(api_base: Optional[str] = None) -> str:
     """Resolve and validate the CyberLens API base URL."""
     candidate = (api_base or os.environ.get("CYBERLENS_API_BASE_URL") or DEFAULT_API_BASE).strip()
@@ -43,15 +62,49 @@ class CyberLensAPIClient:
         if self._client:
             await self._client.aclose()
 
+    @staticmethod
+    def _parse_error_payload(response: httpx.Response) -> Dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _read_response_data(self, response: httpx.Response) -> Dict[str, Any]:
+        payload = self._parse_error_payload(response)
+
+        if response.status_code >= 400:
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = error.get("message") or f"CyberLens API error ({response.status_code})"
+                if response.status_code == 402 and error.get("code") == "QUOTA_EXCEEDED":
+                    raise CyberLensQuotaExceededError(
+                        message,
+                        upgrade_url=error.get("upgrade_url"),
+                        quota_type=error.get("quota_type"),
+                        used=error.get("used"),
+                        limit=error.get("limit"),
+                    )
+                raise RuntimeError(message)
+
+            if isinstance(error, str):
+                raise RuntimeError(error)
+
+            response.raise_for_status()
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("CyberLens API response did not include a data object.")
+        return data
+
     async def start_scan(self, url: str) -> str:
         """Start a scan and return the scan ID."""
         response = await self._client.post(
             f"{self.api_base}/scan",
             json={"url": url},
         )
-        response.raise_for_status()
-        data = response.json()
-        return data["data"]["scan_id"]
+        data = self._read_response_data(response)
+        return data["scan_id"]
 
     async def poll_scan(self, scan_id: str) -> Dict[str, Any]:
         """Poll for scan results with exponential backoff."""
@@ -64,8 +117,7 @@ class CyberLensAPIClient:
             elapsed += delay
 
             response = await self._client.get(f"{self.api_base}/scan/{scan_id}")
-            response.raise_for_status()
-            data = response.json()["data"]
+            data = self._read_response_data(response)
 
             if data["status"] == "completed":
                 return data
@@ -84,5 +136,4 @@ class CyberLensAPIClient:
     async def get_quota(self) -> Dict[str, Any]:
         """Get current usage quota."""
         response = await self._client.get(f"{self.api_base}/quota")
-        response.raise_for_status()
-        return response.json()["data"]
+        return self._read_response_data(response)

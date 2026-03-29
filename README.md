@@ -15,7 +15,7 @@ Stop guessing whether that website, repo, or skill is safe. CyberLens gives you 
 
 ## What You Get
 
-**Website scanning** checks live targets for missing security headers, HTTPS weaknesses, exposed server versions, insecure forms, and more. Cloud scans run 70+ checks; local fallback covers ~15 core checks without an account.
+**Website scanning** has two honest modes: a **local quick scan** without an account and a **full cloud scan** when connected. The local quick scan covers ~15 core checks; the cloud scan runs 70+ checks with richer analysis.
 
 **Repository scanning** analyses GitHub repos for dependency vulnerabilities, leaked secrets, malicious code patterns, and trust posture issues.
 
@@ -38,11 +38,11 @@ Just tell your agent what to scan:
 - "Audit https://github.com/owner/repo for vulnerabilities"
 - "Give me a quick security score for https://example.com"
 
-CyberLens auto-detects the target type and selects the right scan method. Claw Hub skill scanning works immediately -- no account needed.
+CyberLens auto-detects the target type and selects the right scan method. Website quick scans and Claw Hub skill scans work immediately with no account. Repository scans require a connected account.
 
 ### 2. Connect your account (for cloud scans)
 
-Website and repository scans use the CyberLens cloud API. Run the `connect_account` tool to authenticate via cyberlensai.com. This opens a browser, completes authentication, and stores your API key locally. Free accounts get 5 cloud scans/month (3 website + 2 repository). No credit card required.
+Without an account, website scans use the local quick scanner and repository scans stay unavailable. Connect your account to upgrade website scans to the full cloud path and unlock repository scanning. The `connect_account` tool opens a browser, completes authentication, and stores your API key locally. Free accounts get 5 cloud scans/month (3 website + 2 repository). No credit card required. If you exhaust website cloud quota, the skill opens the CyberLens pricing page and falls back to the local quick scan automatically.
 
 Don't have an account? Sign up at [cyberlensai.com](https://cyberlensai.com).
 
@@ -80,7 +80,7 @@ Scan a live website, GitHub repository, or Claw Hub skill URL. CyberLens auto-de
 
 **Parameters:**
 - `target` (required) -- Website URL, GitHub repository URL, or Claw Hub skill URL
-- `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
+- `scan_depth` -- Requested depth: `"quick"`, `"standard"` (default), or `"deep"`. Local website mode always uses the quick scan and warns when a deeper mode was requested.
 - `timeout` -- Request timeout in seconds (default: 30)
 - `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud.
 
@@ -97,20 +97,20 @@ Connect or reconnect your CyberLens account for cloud-powered scanning.
 
 ### scan_website
 
-Scan a website for security vulnerabilities. Uses the cloud API when connected (70+ checks), local engine otherwise.
+Scan a website for security vulnerabilities. Uses the local quick engine without an account and the full cloud API when connected.
 
 **Parameters:**
 - `url` (required) -- The URL to scan (must include `https://` or `http://`)
-- `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
+- `scan_depth` -- Requested depth: `"quick"`, `"standard"` (default), or `"deep"`. Local website mode always uses the quick scan and warns when a deeper mode was requested.
 - `timeout` -- Request timeout in seconds (default: 30)
 - `use_cloud` -- Force cloud (`true`) or local (`false`). Auto-detects by default.
 
 **Example prompts:**
 - "Scan https://example.com for security issues"
-- "Do a deep security scan of https://mysite.com"
+- "Run the full cloud website scan for https://mysite.com"
 - "Check if https://example.com is secure"
 
-**Returns:** Score (0-100), grade (A-F), findings with severity/description/remediation, and scan source (cloud or local).
+**Returns:** Score (0-100), grade (A-F), findings with severity/description/remediation, scan source (cloud or local), and explicit mode metadata showing whether this was a local quick scan or the full cloud scan.
 
 ### scan_repository
 
@@ -196,7 +196,7 @@ List all available detection rules organized by category (headers, HTTPS, disclo
 | AI-powered analysis | No | Yes |
 | PDF report export | Yes (from any result) | Yes (from any result) |
 
-When connected, cloud scanning is used by default for websites and repositories. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Claw Hub skill scanning downloads and analyses the skill package locally and does not require a cloud account.
+When connected, cloud scanning is used by default for websites and repositories. If website cloud quota is exhausted, the skill opens the CyberLens pricing page and still falls back to a local quick website scan automatically. Claw Hub skill scanning downloads and analyses the skill package locally and does not require a cloud account.
 
 ## Account Tiers
 
@@ -214,7 +214,7 @@ When connected, cloud scanning is used by default for websites and repositories.
 
 ## Connecting Your Account
 
-The first time you use a cloud scan, tell your agent to "connect my CyberLens account" (or it will prompt you). This runs the `connect_account` tool, which:
+The first time you want the full cloud scan, tell your agent to "connect my CyberLens account" (or it will prompt you for cloud-only features). This runs the `connect_account` tool, which:
 
 1. Opens your browser to [cyberlensai.com/connect](https://cyberlensai.com/connect)
 2. You sign in or create a free account
@@ -223,6 +223,8 @@ The first time you use a cloud scan, tell your agent to "connect my CyberLens ac
 5. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
 
 No copy-pasting required. The raw account key never appears in the browser callback URL. The skill only accepts HTTPS exchange URLs on official CyberLens hosts.
+
+If you run out of cloud scans later, CyberLens opens the pricing page automatically and the tool response includes a direct upgrade URL.
 
 You can also set the key via environment variable: `CYBERLENS_API_KEY`.
 

@@ -6,8 +6,14 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 from .scanner import SecurityScanner
-from .api_client import CyberLensAPIClient
-from .auth import load_api_base_url, load_api_key, run_connect_flow
+from .api_client import CyberLensAPIClient, CyberLensQuotaExceededError
+from .auth import (
+    build_upgrade_url,
+    load_api_base_url,
+    load_api_key,
+    open_upgrade_page,
+    run_connect_flow,
+)
 from .skill_scanner import scan_skill_local
 from .models import (
     ScanResult,
@@ -305,6 +311,8 @@ def _format_repository_cloud_result(result: Dict[str, Any], target: str) -> Dict
     return {
         "success": True,
         "source": "cloud",
+        "scan_mode": "cloud_full",
+        "coverage": "cloud repository assessment",
         "target_type": "repository",
         "url": result.get("target", target),
         "score": security_score,
@@ -342,6 +350,8 @@ def _format_website_cloud_result(result: Dict[str, Any], target: str) -> Dict[st
     return {
         "success": True,
         "source": "cloud",
+        "scan_mode": "cloud_full",
+        "coverage": "70+ cloud checks",
         "target_type": "website",
         "url": result.get("url", target),
         "score": result.get("scores", {}).get("overall", 0),
@@ -364,6 +374,70 @@ def _format_cloud_scan_result(result: Dict[str, Any], target: str) -> Dict[str, 
     if _is_repository_scan_result(result):
         return _format_repository_cloud_result(result, target)
     return _format_website_cloud_result(result, target)
+
+
+def _build_quota_upgrade_payload(
+    error: CyberLensQuotaExceededError,
+    target_type: str,
+) -> Dict[str, Any]:
+    """Build a user-facing upgrade prompt from a quota exhaustion error."""
+    quota_type = error.quota_type or ("repository" if target_type in ("repository", "skill") else "website")
+    upgrade_url = error.upgrade_url or build_upgrade_url(quota_type)
+    open_upgrade_page(upgrade_url)
+
+    payload: Dict[str, Any] = {
+        "upgrade_required": True,
+        "upgrade_url": upgrade_url,
+        "upgrade_message": str(error),
+        "opened_upgrade_page": True,
+        "quota_type": quota_type,
+    }
+
+    if error.used is not None:
+        payload["quota_used"] = error.used
+    if error.limit is not None:
+        payload["quota_limit"] = error.limit
+
+    return payload
+
+
+def _build_local_website_mode_payload(
+    scan_depth: str,
+    reason: str,
+    quota_prompt: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Describe the local website fallback mode honestly for callers and UIs."""
+    messages = [
+        "This result came from the local quick website scan with roughly 15 core checks."
+    ]
+
+    if scan_depth != "quick":
+        messages.append(
+            f'Requested scan depth "{scan_depth}" is not available in local mode. '
+            'The local quick scan was used instead.'
+        )
+
+    if reason == "no_account":
+        messages.append(
+            "Connect a CyberLens account to unlock the full cloud scan with 70+ checks, "
+            "AI analysis, scan history, and repository scanning."
+        )
+    elif reason == "quota_exhausted" and quota_prompt:
+        messages.append(
+            "Cloud website quota is exhausted, so CyberLens fell back to the local quick scan. "
+            f"Upgrade to restore full cloud coverage: {quota_prompt['upgrade_url']}"
+        )
+    elif reason == "local_requested":
+        messages.append("Local mode was used because use_cloud=False was requested.")
+
+    return {
+        "scan_mode": "local_quick",
+        "coverage": "~15 core local checks",
+        "requested_scan_depth": scan_depth,
+        "effective_scan_depth": "quick",
+        "account_recommended": True,
+        "notice": " ".join(messages),
+    }
 
 
 async def connect_account() -> Dict[str, Any]:
@@ -408,12 +482,15 @@ async def scan_target(
     """
     Scan a live website or GitHub repository URL.
 
-    Website targets can use the CyberLens cloud API or the local fallback engine.
+    Website targets use the local quick scan without an account and the full
+    CyberLens cloud scan when connected.
     GitHub repository targets use the CyberLens cloud API and require an account.
 
     Args:
         target: Website URL or GitHub repository URL
-        scan_depth: How thorough the scan should be ("quick", "standard", "deep")
+        scan_depth: Requested depth ("quick", "standard", "deep"). Local mode
+            always uses the quick website scan and warns when a deeper mode was
+            requested.
         timeout: Request timeout in seconds
         use_cloud: Force cloud (True) or local (False) scanning. None = auto-detect.
 
@@ -428,17 +505,38 @@ async def scan_target(
     api_key = load_api_key()
     api_base_url = load_api_base_url()
     should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
+    quota_prompt: Optional[Dict[str, Any]] = None
+
+    if target_type == "skill" and not (should_use_cloud and api_key):
+        try:
+            result = await scan_skill_local(target, timeout=timeout)
+            result["account_recommended"] = True
+            result["notice"] = (
+                "This result came from the local skill package scan. "
+                "Connect a CyberLens account when you want cloud website scanning or repository scanning."
+            )
+            return result
+        except Exception as e:
+            return {
+                "success": False,
+                "target_type": "skill",
+                "url": target,
+                "error": f"Local skill scan failed: {e}",
+            }
 
     if target_type in ("repository", "skill"):
         if not (should_use_cloud and api_key):
             label = "Skill" if target_type == "skill" else "Repository"
+            skill_hint = ""
+            if target_type == "skill":
+                skill_hint = " Use scan_skill for the local skill package scan without an account."
             return {
                 "success": False,
                 "target_type": target_type,
                 "url": target,
                 "error": (
                     f"{label} scanning requires a connected CyberLens account. "
-                    "Run connect_account or set CYBERLENS_API_KEY."
+                    f"Run connect_account or set CYBERLENS_API_KEY.{skill_hint}"
                 ),
             }
 
@@ -449,6 +547,14 @@ async def scan_target(
                 if target_type == "skill":
                     formatted["target_type"] = "skill"
                 return formatted
+        except CyberLensQuotaExceededError as e:
+            return {
+                "success": False,
+                "target_type": target_type,
+                "url": target,
+                "error": str(e),
+                **_build_quota_upgrade_payload(e, target_type),
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -462,6 +568,8 @@ async def scan_target(
             async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(target)
                 return _format_cloud_scan_result(result, target)
+        except CyberLensQuotaExceededError as e:
+            quota_prompt = _build_quota_upgrade_payload(e, "website")
         except Exception as e:
             if use_cloud is True:
                 return {
@@ -476,14 +584,24 @@ async def scan_target(
         result = await scanner.scan(target)
 
         if result.error:
-            return {
+            failure = {
                 "success": False,
                 "target_type": "website",
                 "error": result.error,
                 "url": result.url,
             }
+            failure.update(
+                _build_local_website_mode_payload(
+                    scan_depth,
+                    "quota_exhausted" if quota_prompt else ("local_requested" if use_cloud is False else "no_account"),
+                    quota_prompt,
+                )
+            )
+            if quota_prompt:
+                failure.update(quota_prompt)
+            return failure
 
-        return {
+        output = {
             "success": True,
             "source": "local",
             "target_type": "website",
@@ -504,6 +622,18 @@ async def scan_target(
                 for f in result.findings
             ],
         }
+        output.update(
+            _build_local_website_mode_payload(
+                scan_depth,
+                "quota_exhausted" if quota_prompt else ("local_requested" if use_cloud is False else "no_account"),
+                quota_prompt,
+            )
+        )
+        if quota_prompt:
+            output.update(quota_prompt)
+            output["cloud_quota_exceeded"] = True
+
+        return output
 
 
 async def scan_website(
@@ -515,12 +645,15 @@ async def scan_website(
     """
     Perform a security scan on a website URL.
 
-    Uses the CyberLens cloud API if connected (more thorough, 70+ checks).
-    Falls back to local scanning if not connected.
+    Uses the local quick scan without an account and the full CyberLens cloud
+    API when connected. If cloud quota is exhausted, it falls back to the local
+    quick scan automatically.
 
     Args:
         url: The website URL to scan (must include https:// or http://)
-        scan_depth: How thorough the scan should be ("quick", "standard", "deep")
+        scan_depth: Requested depth ("quick", "standard", "deep"). Local mode
+            always uses the quick scan and warns when a deeper mode was
+            requested.
         timeout: Request timeout in seconds
         use_cloud: Force cloud (True) or local (False) scanning. None = auto-detect.
 
@@ -591,10 +724,41 @@ async def get_security_score(
     target_type = _classify_target(url)
     api_key = load_api_key()
     api_base_url = load_api_base_url()
+    quota_result: Optional[Dict[str, Any]] = None
 
     if target_type in ("repository", "skill"):
         label = "Skill" if target_type == "skill" else "Repository"
         if not api_key:
+            if target_type == "skill":
+                try:
+                    result = await scan_skill_local(url, timeout=timeout)
+                    score = result.get("score", result.get("security_score", 0))
+                    grade = _score_to_grade(score)
+                    return {
+                        "success": True,
+                        "source": "local",
+                        "scan_mode": "local_skill_package",
+                        "coverage": "local skill package analysis",
+                        "target_type": "skill",
+                        "url": result.get("url", url),
+                        "score": score,
+                        "security_score": score,
+                        "grade": grade,
+                        "assessment": result.get("assessment", _get_grade_assessment(grade)),
+                        "account_recommended": True,
+                        "notice": (
+                            "This score came from the local skill package scan. "
+                            "Connect a CyberLens account for cloud website scanning or repository scanning."
+                        ),
+                    }
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "target_type": "skill",
+                        "url": url,
+                        "error": f"Local skill scoring failed: {e}",
+                    }
+
             return {
                 "success": False,
                 "target_type": target_type,
@@ -613,6 +777,8 @@ async def get_security_score(
                 return {
                     "success": True,
                     "source": "cloud",
+                    "scan_mode": "cloud_full",
+                    "coverage": "cloud repository assessment",
                     "target_type": target_type,
                     "url": result.get("target", url),
                     "score": score,
@@ -621,6 +787,14 @@ async def get_security_score(
                     "grade": grade,
                     "assessment": _get_grade_assessment(grade),
                 }
+        except CyberLensQuotaExceededError as e:
+            return {
+                "success": False,
+                "target_type": target_type,
+                "url": url,
+                "error": str(e),
+                **_build_quota_upgrade_payload(e, target_type),
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -638,26 +812,52 @@ async def get_security_score(
                 return {
                     "success": True,
                     "source": "cloud",
+                    "scan_mode": "cloud_full",
+                    "coverage": "70+ cloud checks",
                     "target_type": "website",
                     "url": url,
                     "score": score,
                     "grade": grade,
                     "assessment": _get_grade_assessment(grade),
                 }
+        except CyberLensQuotaExceededError as e:
+            quota_prompt = _build_quota_upgrade_payload(e, "website")
+            quota_result = {
+                "upgrade_required": True,
+                "upgrade_url": quota_prompt["upgrade_url"],
+                "upgrade_message": quota_prompt["upgrade_message"],
+                "opened_upgrade_page": quota_prompt["opened_upgrade_page"],
+                "quota_type": quota_prompt["quota_type"],
+                "cloud_quota_exceeded": True,
+            }
+            if "quota_used" in quota_prompt:
+                quota_result["quota_used"] = quota_prompt["quota_used"]
+            if "quota_limit" in quota_prompt:
+                quota_result["quota_limit"] = quota_prompt["quota_limit"]
         except Exception:
-            pass  # Fall through to local
+            quota_result = None
 
     async with SecurityScanner(timeout=timeout) as scanner:
         result = await scanner.scan(url)
         if result.error:
-            return {
+            failure = {
                 "success": False,
                 "target_type": "website",
                 "url": result.url,
                 "error": result.error,
             }
+            failure.update(
+                _build_local_website_mode_payload(
+                    "quick",
+                    "quota_exhausted" if quota_result else "no_account",
+                    quota_result,
+                )
+            )
+            if quota_result:
+                failure.update(quota_result)
+            return failure
 
-        return {
+        output = {
             "success": True,
             "source": "local",
             "target_type": "website",
@@ -666,6 +866,17 @@ async def get_security_score(
             "grade": result.grade,
             "assessment": _get_grade_assessment(result.grade),
         }
+        output.update(
+            _build_local_website_mode_payload(
+                "quick",
+                "quota_exhausted" if quota_result else "no_account",
+                quota_result,
+            )
+        )
+        if quota_result:
+            output.update(quota_result)
+
+        return output
 
 
 def _score_to_grade(score: int) -> str:

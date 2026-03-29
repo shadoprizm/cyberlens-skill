@@ -1,6 +1,7 @@
 """Tests for CyberLens skill tools."""
 
 import pytest
+from src.api_client import CyberLensQuotaExceededError
 from src.scanner import Finding as LocalFinding
 from src.scanner import ScanResult as LocalScanResult
 from src.tools import (
@@ -36,6 +37,20 @@ class _FakeLocalScanner:
 
     async def scan(self, url):
         return self._result
+
+
+class _FailingCloudClient:
+    def __init__(self, error):
+        self._error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def scan(self, url):
+        raise self._error
 
 
 class TestExplainFinding:
@@ -316,6 +331,38 @@ class TestScanWebsite:
         assert result["target_type"] == "repository"
         assert "requires a connected CyberLens account" in result["error"]
 
+    async def test_scan_repository_returns_upgrade_prompt_when_quota_is_exhausted(self, monkeypatch):
+        """Repository scans should surface an upgrade prompt instead of a generic error."""
+        from src import tools
+
+        upgrade_calls = []
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0, api_base=None: _FailingCloudClient(
+                CyberLensQuotaExceededError(
+                    "Monthly repository scan limit reached (2/2). Upgrade your plan to continue scanning immediately.",
+                    upgrade_url="https://www.cyberlensai.com/pricing?source=api_quota_exceeded&quota_type=repository#plans",
+                    quota_type="repository",
+                    used=2,
+                    limit=2,
+                )
+            ),
+        )
+        monkeypatch.setattr(tools, "open_upgrade_page", lambda url: upgrade_calls.append(url))
+
+        result = await tools.scan_repository("https://github.com/shadoprizm/cyberlens-skill")
+
+        assert result["success"] is False
+        assert result["upgrade_required"] is True
+        assert result["quota_type"] == "repository"
+        assert result["quota_used"] == 2
+        assert result["quota_limit"] == 2
+        assert result["upgrade_url"].endswith("quota_type=repository#plans")
+        assert upgrade_calls == [result["upgrade_url"]]
+
     async def test_scan_valid_https_site(self, monkeypatch):
         """Test scanning a valid HTTPS site."""
         from src import tools
@@ -352,6 +399,105 @@ class TestScanWebsite:
         assert isinstance(result["score"], int)
         assert 0 <= result["score"] <= 100
         assert result["grade"] in ["A", "B", "C", "D", "F"]
+        assert result["scan_mode"] == "local_quick"
+        assert result["effective_scan_depth"] == "quick"
+        assert "Connect a CyberLens account" in result["notice"]
+
+    async def test_website_quota_exceeded_falls_back_locally_with_upgrade_prompt(self, monkeypatch):
+        """Website scans should preserve the local fallback but still expose an upgrade prompt."""
+        from src import tools
+
+        upgrade_calls = []
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0, api_base=None: _FailingCloudClient(
+                CyberLensQuotaExceededError(
+                    "Monthly website scan limit reached (3/3). Upgrade your plan to continue scanning immediately.",
+                    upgrade_url="https://www.cyberlensai.com/pricing?source=api_quota_exceeded&quota_type=website#plans",
+                    quota_type="website",
+                    used=3,
+                    limit=3,
+                )
+            ),
+        )
+        monkeypatch.setattr(tools, "open_upgrade_page", lambda url: upgrade_calls.append(url))
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com",
+                    score=88,
+                    grade="B",
+                    findings=[],
+                    technologies=["nginx"],
+                    scan_time_ms=15,
+                )
+            ),
+        )
+
+        result = await tools.scan_website("https://example.com")
+
+        assert result["success"] is True
+        assert result["source"] == "local"
+        assert result["cloud_quota_exceeded"] is True
+        assert result["upgrade_required"] is True
+        assert result["scan_mode"] == "local_quick"
+        assert result["upgrade_url"].endswith("quota_type=website#plans")
+        assert "fell back to the local quick scan" in result["notice"]
+        assert upgrade_calls == [result["upgrade_url"]]
+
+    async def test_website_quota_exceeded_still_falls_back_when_cloud_is_forced(self, monkeypatch):
+        """Cloud-forced website scans should still degrade to the local quick scan on quota exhaustion."""
+        from src import tools
+
+        upgrade_calls = []
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda api_key, timeout=30.0, api_base=None: _FailingCloudClient(
+                CyberLensQuotaExceededError(
+                    "Monthly website scan limit reached (3/3). Upgrade your plan to continue scanning immediately.",
+                    upgrade_url="https://www.cyberlensai.com/pricing?source=api_quota_exceeded&quota_type=website#plans",
+                    quota_type="website",
+                    used=3,
+                    limit=3,
+                )
+            ),
+        )
+        monkeypatch.setattr(tools, "open_upgrade_page", lambda url: upgrade_calls.append(url))
+        monkeypatch.setattr(
+            tools,
+            "SecurityScanner",
+            lambda timeout=30.0: _FakeLocalScanner(
+                LocalScanResult(
+                    url="https://example.com",
+                    score=84,
+                    grade="B",
+                    findings=[],
+                    technologies=["nginx"],
+                    scan_time_ms=22,
+                )
+            ),
+        )
+
+        result = await tools.scan_website(
+            "https://example.com",
+            scan_depth="deep",
+            use_cloud=True,
+        )
+
+        assert result["success"] is True
+        assert result["source"] == "local"
+        assert result["cloud_quota_exceeded"] is True
+        assert result["effective_scan_depth"] == "quick"
+        assert 'Requested scan depth "deep" is not available in local mode' in result["notice"]
+        assert upgrade_calls == [result["upgrade_url"]]
     
     async def test_scan_invalid_url(self):
         """Test scanning an invalid URL."""
@@ -426,6 +572,7 @@ class TestGetSecurityScore:
         assert "score" in result
         assert "grade" in result
         assert "assessment" in result
+        assert result["scan_mode"] == "local_quick"
 
     async def test_get_score_supports_repository_reports(self, monkeypatch):
         """Test repository score requests use the repository security score from cloud results."""
@@ -453,6 +600,61 @@ class TestGetSecurityScore:
         assert result["security_score"] == 88
         assert result["trust_score"] == 97
         assert result["grade"] == "B"
+
+    async def test_scan_target_uses_local_skill_scan_without_an_account(self, monkeypatch):
+        """Claw Hub skill URLs should stay useful through scan_target without an account."""
+        from src import tools
+
+        async def fake_scan_skill_local(url, timeout=60.0):
+            return {
+                "success": True,
+                "source": "local",
+                "target_type": "skill",
+                "url": url,
+                "score": 93,
+                "security_score": 93,
+                "grade": "A",
+                "assessment": "Looks safe.",
+                "findings": [],
+            }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(tools, "scan_skill_local", fake_scan_skill_local)
+
+        result = await tools.scan_target("https://clawhub.ai/skills/demo")
+
+        assert result["success"] is True
+        assert result["target_type"] == "skill"
+        assert result["source"] == "local"
+        assert "local skill package scan" in result["notice"]
+
+    async def test_get_score_uses_local_skill_scan_without_an_account(self, monkeypatch):
+        """Skill score checks should also remain available without an account."""
+        from src import tools
+
+        async def fake_scan_skill_local(url, timeout=30.0):
+            return {
+                "success": True,
+                "source": "local",
+                "target_type": "skill",
+                "url": url,
+                "score": 91,
+                "security_score": 91,
+                "grade": "A",
+                "assessment": "Looks safe.",
+                "findings": [],
+            }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: None)
+        monkeypatch.setattr(tools, "scan_skill_local", fake_scan_skill_local)
+
+        result = await tools.get_security_score("https://clawhub.ai/skills/demo")
+
+        assert result["success"] is True
+        assert result["target_type"] == "skill"
+        assert result["source"] == "local"
+        assert result["score"] == 91
+        assert result["scan_mode"] == "local_skill_package"
     
     async def test_score_matches_grade(self, monkeypatch):
         """Test score and grade are consistent."""
