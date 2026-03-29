@@ -5,6 +5,12 @@ description: Scan websites, GitHub repositories, and Claw Hub skills for securit
 
 # CyberLens Security Scanner
 
+[![Open CLAW](https://img.shields.io/badge/Open%20CLAW-Native%20Skill-blue)](https://openclaw.ai)
+[![Claw Hub](https://img.shields.io/badge/Claw%20Hub-Available-brightgreen)](https://clawhub.ai)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB)](https://www.python.org/downloads/)
+[![CyberLens](https://img.shields.io/badge/CyberLens-Powered-orange)](https://cyberlensai.com)
+
 Stop guessing whether that website, repo, or skill is safe. CyberLens gives you a security score, a letter grade, and clear remediation steps in seconds.
 
 ## What You Get
