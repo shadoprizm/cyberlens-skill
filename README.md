@@ -1,100 +1,53 @@
-# CyberLens OpenClaw Skill
+---
+name: cyberlens-security-scanner
+description: Scan websites, GitHub repositories, and Claw Hub skills for security vulnerabilities before you ship, install, or trust them. Supports live web targets (headers, HTTPS, exposed tech, insecure forms), GitHub repos (dependencies, secrets, malicious code), and Claw Hub skill packages (trust posture, behavioural analysis). Returns a 0-100 security score, letter grade (A-F), AI-powered analysis, and plain-English remediation. Export results as formatted markdown or PDF. Use when the user wants to audit a URL, check a skill before installing, scan a repo for vulnerabilities, or generate a security report.
+---
 
-> Scan Claw Hub skills, websites, and GitHub repositories for security issues — directly from OpenClaw
+# CyberLens Security Scanner
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+Stop guessing whether that website, repo, or skill is safe. CyberLens gives you a security score, a letter grade, and clear remediation steps in seconds.
 
-An [OpenClaw](https://openclaw.com) skill that lets AI agents scan [Claw Hub](https://clawhub.ai) skills, live websites, and GitHub repositories for practical security issues before you install or trust them. Paste a Claw Hub link, and CyberLens analyses the skill package for vulnerabilities, malicious code, dependency risks, secret leaks, and trust posture problems — powered by the [CyberLens](https://cyberlensai.com) cloud analysis engine. Results include a security score, trust score, AI-powered analysis, and plain-English remediation advice. Get your report rendered in chat or exported as a downloadable PDF.
+## What You Get
 
-**Free tier includes 5 scans/month** (2 website + 3 repository/skill) — no credit card required. [Sign up at cyberlensai.com](https://cyberlensai.com)
+**Website scanning** checks live targets for missing security headers, HTTPS weaknesses, exposed server versions, insecure forms, and more. Cloud scans run 70+ checks; local fallback covers ~15 core checks without an account.
 
-## Why Install CyberLens
+**Repository scanning** analyses GitHub repos for dependency vulnerabilities, leaked secrets, malicious code patterns, and trust posture issues.
 
-- **Scan Claw Hub skills before you install them.** Paste a `clawhub.ai` link and get a full security assessment.
-- Scan live websites and GitHub repositories from the same skill.
-- Catch missing headers, HTTPS problems, insecure forms, dependency risks, malicious code, and trust posture issues.
-- **Get reports in chat or as a PDF** — choose markdown for messaging (Telegram, Discord, Signal) or export a PDF to download, email, or archive.
-- AI-powered analysis explains what the findings mean and what to do about them.
-- Use deeper cloud scans when connected, with a local website fallback when you are not.
-- **Free scans available** — get started with 5 free scans/month, no account setup required for local website checks.
+**Claw Hub skill scanning** downloads the skill package, extracts it, and analyses the actual source code for dangerous patterns, hardcoded secrets, permission issues, and dependency risks. Paste a Claw Hub URL or a direct download link and CyberLens handles the rest. No account required for skill scanning.
 
-## Installation
+Every scan returns a **0-100 security score**, an **A-F letter grade**, and **plain-English remediation advice**. Results can be viewed as formatted markdown in chat or exported as a professional PDF.
 
-### Via OpenClaw Skills Directory
+## Quick Start
 
-Copy or symlink into your OpenClaw skills folder:
-
-```bash
-# Symlink (recommended for development)
-ln -s /path/to/cyberlens-skill ~/.openclaw/skills/cyberlens
-
-# Or copy
-cp -r /path/to/cyberlens-skill ~/.openclaw/skills/cyberlens
+```
+clawhub install cyberlens-security-scanner
 ```
 
-Install Python dependencies:
+### 1. Scan something
 
-```bash
-pip install -r requirements.txt
-```
+Just tell your agent what to scan:
 
-For a reproducible install of the skill's pinned direct dependencies, use:
+- "Check this skill before I install it: https://clawhub.ai/author/skill-name"
+- "Scan https://example.com for security issues"
+- "Audit https://github.com/owner/repo for vulnerabilities"
+- "Give me a quick security score for https://example.com"
 
-```bash
-pip install -r requirements.lock
-```
+CyberLens auto-detects the target type and selects the right scan method. Claw Hub skill scanning works immediately -- no account needed.
 
-OpenClaw auto-discovers the skill from the `SKILL.md` file on the next session (or ask your agent to "refresh skills").
+### 2. Connect your account (for cloud scans)
 
-### Configuration in openclaw.json (Optional)
+Website and repository scans use the CyberLens cloud API. Run the `connect_account` tool to authenticate via cyberlensai.com. This opens a browser, completes authentication, and stores your API key locally. Free accounts get 5 cloud scans/month (3 website + 2 repository). No credit card required.
 
-```json
-{
-  "skills": {
-    "entries": {
-      "cyberlens": {
-        "enabled": true
-      }
-    }
-  }
-}
-```
+Don't have an account? Sign up at [cyberlensai.com](https://cyberlensai.com).
 
-## Connecting Your Account
+### 3. Get your report
 
-The first time you use the skill, tell your agent to "connect my CyberLens account" (or it will prompt you). This runs the `connect_account` tool, which:
+After any scan, choose how you want results delivered:
 
-1. Opens your browser to [cyberlensai.com/connect](https://cyberlensai.com/connect)
-2. You sign in or create a free account
-3. A callback server receives a short-lived connect code
-4. The skill exchanges that code for your account key over HTTPS
-5. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
+- **In chat** via `generate_report` (formatted markdown)
+- **As a PDF** via `export_report_pdf` (colour-coded, professional layout)
 
-No copy-pasting required. The raw account key no longer appears in the browser callback URL. The skill only accepts HTTPS exchange URLs on official CyberLens hosts, then detects the key on subsequent scans and routes through the cloud API automatically.
-
-You can also set the key via environment variable: `CYBERLENS_API_KEY`.
-The browser-based connect flow uses `https://cyberlensai.com/connect`, while the hosted scan API runs at `https://api.cyberlensai.com/functions/v1/public-api-scan`. If you need to override that endpoint explicitly, set `CYBERLENS_API_BASE_URL`.
-
-### Remote or Server Installs
-
-If OpenClaw is running on a different machine than the browser you use to sign in, set a browser-reachable callback URL before running `connect_account`.
-
-Examples:
-
-```bash
-# Direct LAN or VPN callback
-export CYBERLENS_CONNECT_CALLBACK_URL="http://10.0.0.5:54321/callback"
-
-# Hosted HTTPS callback behind a reverse proxy
-export CYBERLENS_CONNECT_CALLBACK_URL="https://openclaw.example.com/cyberlens/callback"
-export CYBERLENS_CONNECT_BIND_HOST="127.0.0.1"
-export CYBERLENS_CONNECT_BIND_PORT="54321"
-```
-
-`CYBERLENS_CONNECT_BIND_HOST` and `CYBERLENS_CONNECT_BIND_PORT` are optional. Use them when the skill should listen on a different local interface or port than the public callback endpoint. For hosted HTTPS callbacks, your proxy must forward requests to the bind host and port where the skill is listening.
-
-If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually instead. If you do not want the key stored on disk, keep it only in the process environment. When the key is stored locally, the skill writes it with restrictive file permissions where the OS supports them.
+---
 
 ## Tools
 
@@ -102,16 +55,18 @@ If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually
 
 Scan a Claw Hub skill before installing it. This is the primary tool for vetting OpenClaw skills from the Claw Hub marketplace.
 
+The skill package is downloaded, extracted, and analysed locally -- no CyberLens account required. Accepts Claw Hub URLs (the download link is resolved automatically) or direct download URLs.
+
 **Parameters:**
-- `skill_url` (required) -- Claw Hub skill URL (e.g. `https://clawhub.ai/author/skill-name`) or GitHub repository URL for an OpenClaw skill
+- `skill_url` (required) -- Claw Hub skill URL (e.g. `https://clawhub.ai/skills/skill-name`) or direct download URL
 - `timeout` -- Request timeout in seconds (default: 60)
 
 **Example prompts:**
-- "Scan https://clawhub.ai/anthropic/tavily-search before I install it"
+- "Scan https://clawhub.ai/skills/ontology before I install it"
 - "Is this Claw Hub skill safe? https://clawhub.ai/author/skill-name"
 - "Check this skill for malicious code before I install it"
 
-**Returns:** Security score, trust score, grade (A-F), AI analysis, and detailed findings by category (security, dependencies, trust posture, secrets, malicious code, behavioural, artifacts).
+**Returns:** Security score, grade (A-F), assessment, and detailed findings with file locations (dangerous code patterns, hardcoded secrets, manifest issues, dependency problems, external URLs).
 
 ### scan_target
 
@@ -121,7 +76,7 @@ Scan a live website, GitHub repository, or Claw Hub skill URL. CyberLens auto-de
 - `target` (required) -- Website URL, GitHub repository URL, or Claw Hub skill URL
 - `scan_depth` -- `"quick"`, `"standard"` (default), or `"deep"`
 - `timeout` -- Request timeout in seconds (default: 30)
-- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository and skill scans require cloud.
+- `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud.
 
 **Example prompts:**
 - "Scan https://clawhub.ai/author/skill-name for security issues"
@@ -136,7 +91,7 @@ Connect or reconnect your CyberLens account for cloud-powered scanning.
 
 ### scan_website
 
-Scan a website for security vulnerabilities. Uses the cloud API when connected, local engine otherwise.
+Scan a website for security vulnerabilities. Uses the cloud API when connected (70+ checks), local engine otherwise.
 
 **Parameters:**
 - `url` (required) -- The URL to scan (must include `https://` or `http://`)
@@ -153,10 +108,10 @@ Scan a website for security vulnerabilities. Uses the cloud API when connected, 
 
 ### scan_repository
 
-Scan a GitHub repository URL, including OpenClaw skills before installation.
+Scan a GitHub repository for security issues. Requires a connected CyberLens account.
 
 **Parameters:**
-- `repository_url` (required) -- GitHub repository URL (e.g. `https://github.com/owner/repo`) or Claw Hub skill URL
+- `repository_url` (required) -- GitHub repository URL (e.g. `https://github.com/owner/repo`)
 - `timeout` -- Request timeout in seconds (default: 60)
 - `use_cloud` -- Force cloud (`true`) or local (`false`). Repository scans require cloud access.
 
@@ -220,6 +175,8 @@ Get a plain-English explanation of a security finding.
 
 List all available detection rules organized by category (headers, HTTPS, disclosure, forms, repository).
 
+---
+
 ## Cloud vs Local Scanning
 
 | | Local | Cloud |
@@ -228,24 +185,99 @@ List all available detection rules organized by category (headers, HTTPS, disclo
 | Account required | No | Yes |
 | Results match website | No | Yes |
 | Scan history | No | Yes |
-| Claw Hub skill scanning | No | Yes |
+| Claw Hub skill scanning | Yes (local analysis) | Yes (cloud analysis) |
 | Repository scanning | No | Yes |
 | AI-powered analysis | No | Yes |
 | PDF report export | Yes (from any result) | Yes (from any result) |
 
-When connected, cloud scanning is used by default. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Claw Hub skill scanning and repository scanning use the cloud service and do not have a local fallback.
+When connected, cloud scanning is used by default for websites and repositories. If a website cloud scan fails (network issues, quota exceeded), the skill automatically falls back to local scanning unless `use_cloud=True` was explicitly set. Claw Hub skill scanning downloads and analyses the skill package locally and does not require a cloud account.
 
 ## Account Tiers
 
-| Tier | Scans/Month | Price |
-|------|-------------|-------|
-| **Free** | **5 (2 website + 3 repo/skill)** | **Free** |
-| Starter | 10 | Paid |
-| Advanced | 40 | Paid |
-| Premium | 100 | Paid |
-| Agency | Custom | Custom |
+| Tier | Website Scans | Repo/Skill Scans | Combined | Price |
+|------|:---:|:---:|:---:|-------|
+| **Free** | **3** | **2** | **5/month** | **Free** |
+| Starter | 20 | 10 | 30/month | $12/mo |
+| Advanced | 65 | 35 | 100/month | $25/mo |
+| Premium | 175 | 75 | 250/month | $49/mo |
+| Agency | 500 | 250 | 750/month | $149/mo |
 
-**Get started free** — 5 scans/month with no credit card required. Sign up at [cyberlensai.com](https://cyberlensai.com).
+**Get started free** -- 5 scans/month with no credit card required. Sign up at [cyberlensai.com](https://cyberlensai.com).
+
+---
+
+## Connecting Your Account
+
+The first time you use a cloud scan, tell your agent to "connect my CyberLens account" (or it will prompt you). This runs the `connect_account` tool, which:
+
+1. Opens your browser to [cyberlensai.com/connect](https://cyberlensai.com/connect)
+2. You sign in or create a free account
+3. A local callback server receives a short-lived connect code
+4. The skill exchanges that code for your account key over HTTPS
+5. The key is stored at `~/.openclaw/skills/cyberlens/config.yaml`
+
+No copy-pasting required. The raw account key never appears in the browser callback URL. The skill only accepts HTTPS exchange URLs on official CyberLens hosts.
+
+You can also set the key via environment variable: `CYBERLENS_API_KEY`.
+
+### Remote or Server Installs
+
+If OpenClaw is running on a different machine than your browser, set a browser-reachable callback URL before running `connect_account`:
+
+```bash
+# Direct LAN or VPN callback
+export CYBERLENS_CONNECT_CALLBACK_URL="http://10.0.0.5:54321/callback"
+
+# Hosted HTTPS callback behind a reverse proxy
+export CYBERLENS_CONNECT_CALLBACK_URL="https://openclaw.example.com/cyberlens/callback"
+export CYBERLENS_CONNECT_BIND_HOST="127.0.0.1"
+export CYBERLENS_CONNECT_BIND_PORT="54321"
+```
+
+If you do not want to expose a callback at all, set `CYBERLENS_API_KEY` manually instead.
+
+---
+
+## Installation
+
+### Via Claw Hub
+
+```
+clawhub install cyberlens-security-scanner
+```
+
+### Manual
+
+Copy or symlink into your OpenClaw skills folder:
+
+```bash
+# Symlink (recommended for development)
+ln -s /path/to/cyberlens-skill ~/.openclaw/skills/cyberlens
+
+# Or copy
+cp -r /path/to/cyberlens-skill ~/.openclaw/skills/cyberlens
+```
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+For reproducible installs with pinned versions:
+
+```bash
+pip install -r requirements.lock
+```
+
+OpenClaw auto-discovers the skill from the `SKILL.md` file on the next session.
+
+### Prerequisites
+
+- Python 3.9+
+- PDF export requires `reportlab` (included in requirements.txt)
+
+---
 
 ## Project Structure
 
@@ -258,19 +290,13 @@ cyberlens-skill/
   SECURITY.md           # Vulnerability reporting policy
   CONTRIBUTING.md       # Contribution workflow and expectations
   LICENSE               # Apache 2.0 license
-  .github/workflows/ci.yml  # Automated test workflow
   src/
-    __init__.py         # Package exports
-    tools.py            # Tool implementations (connect, scan, scan_skill, report, PDF, score, explain, rules)
+    tools.py            # Tool implementations
+    skill_scanner.py    # Local skill analyser (download, extract, scan, cleanup)
     scanner.py          # Local SecurityScanner (async, httpx + BeautifulSoup)
     api_client.py       # CyberLens cloud API client (async, exponential backoff)
     auth.py             # Browser-based connect flow with secure code exchange
     models.py           # Pydantic data models
-  examples/
-    basic_scan.py
-    batch_scan.py
-    custom_rules.py
-  tests/
 ```
 
 ## Dependencies
@@ -281,19 +307,17 @@ cyberlens-skill/
 - `pyyaml` -- Config file handling
 - `reportlab` -- PDF report generation
 
-The local scanner uses Python's built-in `html.parser` via BeautifulSoup, so `lxml` is not required for the default install.
-
 ## Security
 
 Please review [SECURITY.md](SECURITY.md) before reporting vulnerabilities. Sensitive reports should not be filed as public issues.
 
-## Related Repositories
+## Related
 
 | Repository | Description |
 |------------|-------------|
-| [cyberlens-oss](https://github.com/shadoprizm/cyberlens-oss) | Core Python scanner and CLI |
+| [cyberlens-mcp-server](https://github.com/shadoprizm/cyberlens-mcp-server) | MCP server for Claude Desktop, VS Code, and other AI assistants |
 | [cyberlens-extension](https://github.com/shadoprizm/cyberlens-extension) | Chrome extension |
-| [cyberlens-examples](https://github.com/shadoprizm/cyberlens-examples) | Integration examples and tutorials |
+| [CyberLens](https://cyberlensai.com) | Full platform with browser-based scanning and dashboards |
 
 ## License
 

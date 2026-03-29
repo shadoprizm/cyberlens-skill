@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from .scanner import SecurityScanner
 from .api_client import CyberLensAPIClient
 from .auth import load_api_base_url, load_api_key, run_connect_flow
+from .skill_scanner import scan_skill_local
 from .models import (
     ScanResult,
     SecurityScore,
@@ -794,54 +795,55 @@ async def scan_skill(
     """
     Scan a Claw Hub skill before installing it.
 
-    Accepts a Claw Hub URL (e.g. https://clawhub.ai/author/skill-name) or a
-    GitHub repository URL for an OpenClaw skill. The scan is performed by the
-    CyberLens cloud API, which analyses the skill package for security
-    vulnerabilities, malicious code, dependency issues, secret leaks, and
-    trust posture problems. A connected CyberLens account is required.
+    Accepts a Claw Hub URL (e.g. https://clawhub.ai/skills/skill-name),
+    a direct download URL (e.g. https://*.convex.site/api/v1/download?slug=name),
+    or a GitHub repository URL for an OpenClaw skill.
+
+    The skill zip is downloaded, extracted, and analysed locally for security
+    issues including hardcoded secrets, dangerous code patterns, insecure
+    network requests, and manifest completeness. No CyberLens account is
+    required for skill scanning.
+
+    For GitHub repository URLs, use scan_repository instead (requires a
+    CyberLens account).
 
     Args:
-        skill_url: Claw Hub skill URL or GitHub repository URL for an OpenClaw skill
+        skill_url: Claw Hub skill URL, direct download URL, or GitHub repo URL
         timeout: Request timeout in seconds (default: 60)
 
     Returns:
-        Dictionary with security score, trust score, grade, AI analysis,
-        and detailed findings organised by category
+        Dictionary with security score, grade, assessment, and detailed findings
     """
     validation_error = _validate_target_url(skill_url)
     if validation_error:
         return {"success": False, "error": validation_error, "url": skill_url}
 
     target_type = _classify_target(skill_url)
-    if target_type not in ("skill", "repository"):
+
+    # GitHub repos should use scan_repository
+    if target_type == "repository":
         return {
             "success": False,
             "error": (
-                "Expected a Claw Hub skill URL (e.g. https://clawhub.ai/author/skill-name) "
-                "or a GitHub repository URL (e.g. https://github.com/owner/repo)."
+                "Repository URLs cannot be scanned as CLAW skills directly. "
+                "Use scan_repository for repo security audits, or provide the "
+                "Claw Hub URL (e.g. https://clawhub.ai/skills/skill-name)."
             ),
             "url": skill_url,
         }
 
-    api_key = load_api_key()
-    if not api_key:
+    if target_type not in ("skill", "website"):
         return {
             "success": False,
-            "target_type": "skill",
-            "url": skill_url,
             "error": (
-                "Skill scanning requires a connected CyberLens account. "
-                "Run connect_account or set CYBERLENS_API_KEY."
+                "Expected a Claw Hub skill URL (e.g. https://clawhub.ai/skills/skill-name) "
+                "or a direct download URL."
             ),
+            "url": skill_url,
         }
 
-    api_base_url = load_api_base_url()
     try:
-        async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
-            result = await client.scan(skill_url)
-            formatted = _format_cloud_scan_result(result, skill_url)
-            formatted["target_type"] = "skill"
-            return formatted
+        return await scan_skill_local(skill_url, timeout=timeout)
     except Exception as e:
         return {
             "success": False,
