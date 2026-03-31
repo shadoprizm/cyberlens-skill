@@ -7,6 +7,7 @@ from src.scanner import ScanResult as LocalScanResult
 from src.tools import (
     explain_finding,
     list_scan_rules,
+    _classify_target,
     _get_grade_assessment,
 )
 
@@ -144,6 +145,24 @@ class TestListScanRules:
         )
         
         assert total == calculated
+
+
+class TestTargetClassification:
+    """Tests for target classification helpers."""
+
+    def test_classifies_clawhub_skill_urls_as_skills(self):
+        assert _classify_target("https://clawhub.ai/skills/demo") == "skill"
+        assert _classify_target("https://clawhub.ai/author/demo-skill") == "skill"
+
+    def test_classifies_direct_skill_download_urls_as_skills(self):
+        assert (
+            _classify_target("https://abc123.convex.site/api/v1/download?slug=demo")
+            == "skill"
+        )
+
+    def test_does_not_treat_generic_clawhub_pages_as_skills(self):
+        assert _classify_target("https://clawhub.ai/about") == "website"
+        assert _classify_target("https://clawhub.ai/plugins") == "website"
 
 
 class TestGetGradeAssessment:
@@ -655,6 +674,77 @@ class TestGetSecurityScore:
         assert result["source"] == "local"
         assert result["score"] == 91
         assert result["scan_mode"] == "local_skill_package"
+
+    async def test_scan_target_uses_local_skill_scan_with_connected_account(self, monkeypatch):
+        """Skill URLs should still scan the package even when cloud access is available."""
+        from src import tools
+
+        async def fake_scan_skill_local(url, timeout=60.0):
+            return {
+                "success": True,
+                "source": "local",
+                "scan_mode": "local_skill_package",
+                "coverage": "local skill package analysis",
+                "target_type": "skill",
+                "url": url,
+                "score": 88,
+                "security_score": 88,
+                "grade": "B",
+                "assessment": "Package reviewed.",
+                "findings": [],
+            }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(tools, "scan_skill_local", fake_scan_skill_local)
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda *args, **kwargs: pytest.fail("Skill URLs should not hit the cloud scan API."),
+        )
+
+        result = await tools.scan_target("https://clawhub.ai/rexshang/skillscanner")
+
+        assert result["success"] is True
+        assert result["target_type"] == "skill"
+        assert result["source"] == "local"
+        assert result["scan_mode"] == "local_skill_package"
+        assert "not used for Claw Hub skill URLs" in result["notice"]
+
+    async def test_get_score_uses_local_skill_scan_with_connected_account(self, monkeypatch):
+        """Skill score checks should stay package-based even when an account is connected."""
+        from src import tools
+
+        async def fake_scan_skill_local(url, timeout=30.0):
+            return {
+                "success": True,
+                "source": "local",
+                "scan_mode": "local_skill_package",
+                "coverage": "local skill package analysis",
+                "target_type": "skill",
+                "url": url,
+                "score": 89,
+                "security_score": 89,
+                "grade": "B",
+                "assessment": "Package reviewed.",
+                "findings": [],
+            }
+
+        monkeypatch.setattr(tools, "load_api_key", lambda: "clns_acct_test")
+        monkeypatch.setattr(tools, "scan_skill_local", fake_scan_skill_local)
+        monkeypatch.setattr(
+            tools,
+            "CyberLensAPIClient",
+            lambda *args, **kwargs: pytest.fail("Skill URLs should not hit the cloud scan API."),
+        )
+
+        result = await tools.get_security_score("https://clawhub.ai/rexshang/skillscanner")
+
+        assert result["success"] is True
+        assert result["target_type"] == "skill"
+        assert result["source"] == "local"
+        assert result["score"] == 89
+        assert result["scan_mode"] == "local_skill_package"
+        assert "not used for Claw Hub skill URLs" in result["notice"]
     
     async def test_score_matches_grade(self, monkeypatch):
         """Test score and grade are consistent."""

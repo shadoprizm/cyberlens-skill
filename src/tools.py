@@ -34,6 +34,18 @@ CLAWHUB_HOSTS = {
 }
 
 
+CLAWHUB_RESERVED_PATHS = {
+    "about",
+    "api",
+    "plugins",
+    "privacy",
+    "search",
+    "settings",
+    "sign-in",
+    "terms",
+}
+
+
 GITHUB_RESERVED_PATHS = {
     "about",
     "account",
@@ -177,6 +189,24 @@ def _validate_target_url(target: str) -> Optional[str]:
     return None
 
 
+def _is_clawhub_skill_path(path_parts: List[str]) -> bool:
+    """Return True when the Claw Hub path looks like a skill detail page."""
+    if len(path_parts) < 2:
+        return False
+
+    first_segment = path_parts[0].lower()
+    if first_segment == "skills":
+        return True
+
+    return first_segment not in CLAWHUB_RESERVED_PATHS
+
+
+def _is_skill_download_url(parsed) -> bool:
+    """Return True when the URL points at a direct skill download endpoint."""
+    host = (parsed.hostname or "").lower()
+    return host.endswith(".convex.site") and parsed.path.rstrip("/") == "/api/v1/download"
+
+
 def _classify_target(target: str) -> str:
     """Classify a scan target as a website, GitHub repository, or Claw Hub skill."""
     validation_error = _validate_target_url(target)
@@ -184,11 +214,14 @@ def _classify_target(target: str) -> str:
         return "invalid"
 
     parsed = urlparse(target)
-    host = parsed.netloc.lower()
+    host = (parsed.hostname or "").lower()
     path_parts = [part for part in parsed.path.split("/") if part]
 
-    # Claw Hub skill pages: clawhub.ai/author/skill-name
-    if host in CLAWHUB_HOSTS and len(path_parts) >= 1:
+    if _is_skill_download_url(parsed):
+        return "skill"
+
+    # Claw Hub skill pages: clawhub.ai/skills/skill-name or clawhub.ai/author/skill-name
+    if host in CLAWHUB_HOSTS and _is_clawhub_skill_path(path_parts):
         return "skill"
 
     if host in {"github.com", "www.github.com"} and len(path_parts) >= 2:
@@ -480,14 +513,16 @@ async def scan_target(
     use_cloud: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
-    Scan a live website or GitHub repository URL.
+    Scan a live website, GitHub repository URL, or Claw Hub skill.
 
     Website targets use the local quick scan without an account and the full
     CyberLens cloud scan when connected.
     GitHub repository targets use the CyberLens cloud API and require an account.
+    Claw Hub skills are downloaded and analysed locally so the package contents
+    are inspected instead of the hosted marketplace page.
 
     Args:
-        target: Website URL or GitHub repository URL
+        target: Website URL, GitHub repository URL, Claw Hub skill URL, or direct skill download URL
         scan_depth: Requested depth ("quick", "standard", "deep"). Local mode
             always uses the quick website scan and warns when a deeper mode was
             requested.
@@ -507,14 +542,20 @@ async def scan_target(
     should_use_cloud = use_cloud if use_cloud is not None else bool(api_key)
     quota_prompt: Optional[Dict[str, Any]] = None
 
-    if target_type == "skill" and not (should_use_cloud and api_key):
+    if target_type == "skill":
         try:
             result = await scan_skill_local(target, timeout=timeout)
             result["account_recommended"] = True
-            result["notice"] = (
-                "This result came from the local skill package scan. "
-                "Connect a CyberLens account when you want cloud website scanning or repository scanning."
-            )
+            messages = ["This result came from the local skill package scan."]
+            if should_use_cloud and api_key:
+                messages.append(
+                    "Connected-account cloud scanning is not used for Claw Hub skill URLs because CyberLens should inspect the skill package, not the Claw Hub page."
+                )
+            else:
+                messages.append(
+                    "Connect a CyberLens account when you want cloud website scanning or repository scanning."
+                )
+            result["notice"] = " ".join(messages)
             return result
         except Exception as e:
             return {
@@ -524,43 +565,36 @@ async def scan_target(
                 "error": f"Local skill scan failed: {e}",
             }
 
-    if target_type in ("repository", "skill"):
+    if target_type == "repository":
         if not (should_use_cloud and api_key):
-            label = "Skill" if target_type == "skill" else "Repository"
-            skill_hint = ""
-            if target_type == "skill":
-                skill_hint = " Use scan_skill for the local skill package scan without an account."
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "repository",
                 "url": target,
                 "error": (
-                    f"{label} scanning requires a connected CyberLens account. "
-                    f"Run connect_account or set CYBERLENS_API_KEY.{skill_hint}"
+                    "Repository scanning requires a connected CyberLens account. "
+                    "Run connect_account or set CYBERLENS_API_KEY."
                 ),
             }
 
         try:
             async with CyberLensAPIClient(api_key, timeout=timeout, api_base=api_base_url) as client:
                 result = await client.scan(target)
-                formatted = _format_cloud_scan_result(result, target)
-                if target_type == "skill":
-                    formatted["target_type"] = "skill"
-                return formatted
+                return _format_cloud_scan_result(result, target)
         except CyberLensQuotaExceededError as e:
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "repository",
                 "url": target,
                 "error": str(e),
-                **_build_quota_upgrade_payload(e, target_type),
+                **_build_quota_upgrade_payload(e, "repository"),
             }
         except Exception as e:
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "repository",
                 "url": target,
-                "error": f"Cloud {target_type} scan failed: {e}",
+                "error": f"Cloud repository scan failed: {e}",
             }
 
     if should_use_cloud and api_key:
@@ -726,45 +760,50 @@ async def get_security_score(
     api_base_url = load_api_base_url()
     quota_result: Optional[Dict[str, Any]] = None
 
-    if target_type in ("repository", "skill"):
-        label = "Skill" if target_type == "skill" else "Repository"
-        if not api_key:
-            if target_type == "skill":
-                try:
-                    result = await scan_skill_local(url, timeout=timeout)
-                    score = result.get("score", result.get("security_score", 0))
-                    grade = _score_to_grade(score)
-                    return {
-                        "success": True,
-                        "source": "local",
-                        "scan_mode": "local_skill_package",
-                        "coverage": "local skill package analysis",
-                        "target_type": "skill",
-                        "url": result.get("url", url),
-                        "score": score,
-                        "security_score": score,
-                        "grade": grade,
-                        "assessment": result.get("assessment", _get_grade_assessment(grade)),
-                        "account_recommended": True,
-                        "notice": (
-                            "This score came from the local skill package scan. "
-                            "Connect a CyberLens account for cloud website scanning or repository scanning."
-                        ),
-                    }
-                except Exception as e:
-                    return {
-                        "success": False,
-                        "target_type": "skill",
-                        "url": url,
-                        "error": f"Local skill scoring failed: {e}",
-                    }
-
+    if target_type == "skill":
+        try:
+            result = await scan_skill_local(url, timeout=timeout)
+            score = result.get("score", result.get("security_score", 0))
+            grade = _score_to_grade(score)
+            messages = ["This score came from the local skill package scan."]
+            if api_key:
+                messages.append(
+                    "Connected-account cloud scanning is not used for Claw Hub skill URLs because CyberLens should score the skill package, not the Claw Hub page."
+                )
+            else:
+                messages.append(
+                    "Connect a CyberLens account for cloud website scanning or repository scanning."
+                )
+            return {
+                "success": True,
+                "source": "local",
+                "scan_mode": "local_skill_package",
+                "coverage": "local skill package analysis",
+                "target_type": "skill",
+                "url": result.get("url", url),
+                "score": score,
+                "security_score": score,
+                "grade": grade,
+                "assessment": result.get("assessment", _get_grade_assessment(grade)),
+                "account_recommended": True,
+                "notice": " ".join(messages),
+            }
+        except Exception as e:
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "skill",
+                "url": url,
+                "error": f"Local skill scoring failed: {e}",
+            }
+
+    if target_type == "repository":
+        if not api_key:
+            return {
+                "success": False,
+                "target_type": "repository",
                 "url": url,
                 "error": (
-                    f"{label} scoring requires a connected CyberLens account. "
+                    "Repository scoring requires a connected CyberLens account. "
                     "Run connect_account or set CYBERLENS_API_KEY."
                 ),
             }
@@ -790,17 +829,17 @@ async def get_security_score(
         except CyberLensQuotaExceededError as e:
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "repository",
                 "url": url,
                 "error": str(e),
-                **_build_quota_upgrade_payload(e, target_type),
+                **_build_quota_upgrade_payload(e, "repository"),
             }
         except Exception as e:
             return {
                 "success": False,
-                "target_type": target_type,
+                "target_type": "repository",
                 "url": url,
-                "error": f"Cloud {target_type} scoring failed: {e}",
+                "error": f"Cloud repository scoring failed: {e}",
             }
 
     if api_key:

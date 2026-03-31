@@ -390,6 +390,8 @@ async def scan_skill_local(skill_url: str, timeout: float = 30.0) -> Dict[str, A
         return {
             "success": True,
             "source": "local",
+            "scan_mode": "local_skill_package",
+            "coverage": "local skill package analysis",
             "target_type": "skill",
             "url": skill_url,
             "download_url": download_url,
